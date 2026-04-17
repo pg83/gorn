@@ -98,7 +98,7 @@ func classify(stdout, stderr string) (RunOutcome, string) {
 	finish := lastFinishMsg(stdout)
 
 	if finish == nil {
-		return OutcomeRetriable, "no finish message; stderr: " + truncate(stderr, 400)
+		return OutcomeRetriable, "no finish message; stderr: " + stderr
 	}
 
 	if finish.Outcome == "already-done" {
@@ -139,14 +139,6 @@ func lastFinishMsg(stdout string) *FinishMsg {
 	}
 
 	return nil
-}
-
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-
-	return s[:n] + "...(truncated)"
 }
 
 func shellQuote(s string) string {
