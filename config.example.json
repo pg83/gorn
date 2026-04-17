@@ -1,0 +1,26 @@
+{
+  "endpoints": [
+    {"host": "node1.home.local", "user": "gorn-w1", "path": "/srv/gorn/w1"},
+    {"host": "node1.home.local", "user": "gorn-w2", "path": "/srv/gorn/w2"},
+    {"host": "node2.home.local", "user": "gorn-w3", "path": "/srv/gorn/w3"},
+    {"host": "node2.home.local", "user": "gorn-w4", "path": "/srv/gorn/w4"},
+    {"host": "node3.home.local", "user": "gorn-w5", "path": "/srv/gorn/w5"},
+    {"host": "node3.home.local", "user": "gorn-w6", "path": "/srv/gorn/w6"}
+  ],
+  "etcd": {
+    "endpoints": [
+      "http://etcd1.home.local:2379",
+      "http://etcd2.home.local:2379",
+      "http://etcd3.home.local:2379"
+    ]
+  },
+  "s3": {
+    "endpoint": "http://minio.home.local:9000",
+    "region": "us-east-1",
+    "bucket": "gorn",
+    "access_key": "REPLACE_ME",
+    "secret_key": "REPLACE_ME",
+    "use_path_style": true
+  },
+  "ssh_key_path": "/etc/gorn/ssh_key"
+}
