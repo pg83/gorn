@@ -11,10 +11,10 @@ import (
 )
 
 type Dispatcher struct {
-	cli    *clientv3.Client
-	leader *Leader
-	cfg    *Config
-	sshKey []byte
+	cli        *clientv3.Client
+	leader     *Leader
+	cfg        *Config
+	sshKeyPath string
 
 	mu       sync.Mutex
 	inflight map[string]struct{}
@@ -22,14 +22,14 @@ type Dispatcher struct {
 	wake chan struct{}
 }
 
-func NewDispatcher(cli *clientv3.Client, leader *Leader, cfg *Config, sshKey []byte) *Dispatcher {
+func NewDispatcher(cli *clientv3.Client, leader *Leader, cfg *Config, sshKeyPath string) *Dispatcher {
 	return &Dispatcher{
-		cli:      cli,
-		leader:   leader,
-		cfg:      cfg,
-		sshKey:   sshKey,
-		inflight: make(map[string]struct{}),
-		wake:     make(chan struct{}, 1),
+		cli:        cli,
+		leader:     leader,
+		cfg:        cfg,
+		sshKeyPath: sshKeyPath,
+		inflight:   make(map[string]struct{}),
+		wake:       make(chan struct{}, 1),
 	}
 }
 
@@ -112,7 +112,7 @@ func (d *Dispatcher) oneIteration(ctx context.Context, ep Endpoint) {
 
 	defer d.releaseInflight(task.GUID)
 
-	outcome, detail := runTaskOnEndpoint(ctx, ep, task, d.cfg.S3, d.sshKey)
+	outcome, detail := runTaskOnEndpoint(ctx, ep, task, d.cfg.S3, d.sshKeyPath)
 
 	fmt.Fprintf(os.Stderr, "task %s on %s@%s: %s (%s)\n", task.GUID, ep.User, ep.Host, outcome, detail)
 

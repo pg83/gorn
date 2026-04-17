@@ -5,11 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net"
+	"os/exec"
 	"strings"
-	"time"
-
-	"golang.org/x/crypto/ssh"
 )
 
 type RunOutcome int
@@ -33,12 +30,12 @@ func (o RunOutcome) String() string {
 	return "unknown"
 }
 
-func runTaskOnEndpoint(ctx context.Context, ep Endpoint, task Task, s3cfg S3Config, sshKey []byte) (outcome RunOutcome, detail string) {
+func runTaskOnEndpoint(ctx context.Context, ep Endpoint, task Task, s3cfg S3Config, sshKeyPath string) (outcome RunOutcome, detail string) {
 	outcome = OutcomeRetriable
 	detail = ""
 
 	exc := Try(func() {
-		outcome, detail = doRunTask(ctx, ep, task, s3cfg, sshKey)
+		outcome, detail = doRunTask(ctx, ep, task, s3cfg, sshKeyPath)
 	})
 
 	exc.Catch(func(e *Exception) {
@@ -49,7 +46,7 @@ func runTaskOnEndpoint(ctx context.Context, ep Endpoint, task Task, s3cfg S3Conf
 	return outcome, detail
 }
 
-func doRunTask(ctx context.Context, ep Endpoint, task Task, s3cfg S3Config, sshKey []byte) (RunOutcome, string) {
+func doRunTask(ctx context.Context, ep Endpoint, task Task, s3cfg S3Config, sshKeyPath string) (RunOutcome, string) {
 	input := WrapInput{
 		GUID: task.GUID,
 		Cmd:  task.Cmd,
@@ -60,37 +57,26 @@ func doRunTask(ctx context.Context, ep Endpoint, task Task, s3cfg S3Config, sshK
 
 	inputJSON := Throw2(json.Marshal(input))
 
-	signer := Throw2(ssh.ParsePrivateKey(sshKey))
-
-	config := &ssh.ClientConfig{
-		User:            ep.User,
-		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
-		Timeout:         15 * time.Second,
-	}
-
-	addr := ep.Host
-
-	if !strings.Contains(addr, ":") {
-		addr = net.JoinHostPort(addr, "22")
-	}
-
-	client := Throw2(ssh.Dial("tcp", addr, config))
-	defer client.Close()
-
-	session := Throw2(client.NewSession())
-	defer session.Close()
-
-	var stdoutBuf, stderrBuf bytes.Buffer
-	session.Stdout = &stdoutBuf
-	session.Stderr = &stderrBuf
-	session.Stdin = bytes.NewReader(inputJSON)
-
 	remoteCmd := fmt.Sprintf("cd %s && gorn wrap", shellQuote(ep.Path))
 
-	runErr := session.Run(remoteCmd)
+	sshArgs := []string{
+		"-i", sshKeyPath,
+		"-o", "BatchMode=yes",
+		"-o", "StrictHostKeyChecking=accept-new",
+		"-o", "ConnectTimeout=15",
+		"-o", "ServerAliveInterval=30",
+		ep.User + "@" + ep.Host,
+		remoteCmd,
+	}
 
-	_ = runErr
+	cmd := exec.CommandContext(ctx, "ssh", sshArgs...)
+
+	var stdoutBuf, stderrBuf bytes.Buffer
+	cmd.Stdin = bytes.NewReader(inputJSON)
+	cmd.Stdout = &stdoutBuf
+	cmd.Stderr = &stderrBuf
+
+	_ = cmd.Run()
 
 	outcome, detail := classify(stdoutBuf.String(), stderrBuf.String())
 

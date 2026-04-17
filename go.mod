@@ -8,7 +8,6 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.58.2
 	github.com/aws/smithy-go v1.20.3
 	go.etcd.io/etcd/client/v3 v3.5.13
-	golang.org/x/crypto v0.22.0
 )
 
 require (

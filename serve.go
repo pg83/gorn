@@ -32,7 +32,7 @@ func serveMain(args []string) {
 		ThrowFmt("serve: etcd.endpoints is required in config")
 	}
 
-	sshKey := Throw2(os.ReadFile(cfg.SSHKeyPath))
+	Throw2(os.Stat(cfg.SSHKeyPath))
 
 	cli := newEtcdClient(cfg.Etcd)
 	defer cli.Close()
@@ -64,7 +64,7 @@ func serveMain(args []string) {
 		os.Exit(0)
 	}()
 
-	disp := NewDispatcher(cli, leader, cfg, sshKey)
+	disp := NewDispatcher(cli, leader, cfg, cfg.SSHKeyPath)
 	disp.Run(ctx)
 
 	leader.Resign(context.Background())

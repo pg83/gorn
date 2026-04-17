@@ -10,7 +10,7 @@ See [`README.md`](README.md) for the full picture and [`STYLE.md`](STYLE.md) for
 - **Blank lines around every `if`/`for`/`switch`/`select` and before every `return`**, unless the statement is the first/last inside `{}`. Consecutive `Throw*`/`:=`/`=` that form one logical step stay together; split logical steps with a blank line. See `STYLE.md` for examples.
 - **Config is JSON. Never YAML.** Not as an example, not as an alternative — just don't.
 - **Files live in the repo root.** Don't create `internal/`, `cmd/`, `pkg/` — this project is intentionally flat.
-- **Native Go libraries** over shelling out. SSH via `golang.org/x/crypto/ssh`; S3 via `aws-sdk-go-v2` (works against MinIO too); etcd via `go.etcd.io/etcd/client/v3`.
+- **Library choices**: S3 via `aws-sdk-go-v2` (works against MinIO), etcd via `go.etcd.io/etcd/client/v3`. For SSH we **shell out** to the `ssh` binary — process isolation lets a stuck connection be killed on the target host without touching the daemon. Outcome is read as JSON from the wrap's stdout, not from ssh's exit code.
 
 ## Subcommands
 
