@@ -7,6 +7,7 @@ import (
 
 type Endpoint struct {
 	Host string `json:"host"`
+	Port int    `json:"port,omitempty"`
 	User string `json:"user"`
 	Path string `json:"path"`
 }
@@ -25,10 +26,11 @@ type S3Config struct {
 }
 
 type Config struct {
-	Endpoints  []Endpoint `json:"endpoints"`
-	Etcd       EtcdConfig `json:"etcd"`
-	S3         S3Config   `json:"s3"`
-	SSHKeyPath string     `json:"ssh_key_path"`
+	Endpoints      []Endpoint `json:"endpoints"`
+	Etcd           EtcdConfig `json:"etcd"`
+	S3             S3Config   `json:"s3"`
+	SSHKeyPath     string     `json:"ssh_key_path"`
+	RemoteWrapPath string     `json:"remote_wrap_path,omitempty"`
 }
 
 func LoadConfig(path string) *Config {

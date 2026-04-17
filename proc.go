@@ -16,6 +16,12 @@ func killStaleUnder(username string) {
 	u := Throw2(osuser.Lookup(username))
 	targetUID := Throw2(strconv.Atoi(u.Uid))
 
+	if targetUID == 0 {
+		fmt.Fprintln(os.Stderr, "wrap: refusing to kill stale processes under uid 0 (test mode)")
+
+		return
+	}
+
 	entries := Throw2(os.ReadDir("/proc"))
 
 	for _, e := range entries {

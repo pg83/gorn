@@ -3,9 +3,11 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"strconv"
 	"strings"
 )
 
@@ -57,10 +59,19 @@ func doRunTask(ctx context.Context, ep Endpoint, task Task, s3cfg S3Config, sshK
 
 	inputJSON := Throw2(json.Marshal(input))
 
-	remoteCmd := fmt.Sprintf("cd %s && gorn wrap", shellQuote(ep.Path))
+	payload := fmt.Sprintf("cd %s && PATH=$PWD:$PATH gorn wrap", shellQuote(ep.Path))
+	encoded := base64.StdEncoding.EncodeToString([]byte(payload))
+	remoteCmd := `eval "$(echo ` + encoded + ` | base64 -d)"`
+
+	port := ep.Port
+
+	if port == 0 {
+		port = 22
+	}
 
 	sshArgs := []string{
 		"-i", sshKeyPath,
+		"-p", strconv.Itoa(port),
 		"-o", "BatchMode=yes",
 		"-o", "StrictHostKeyChecking=accept-new",
 		"-o", "ConnectTimeout=15",

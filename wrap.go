@@ -67,8 +67,6 @@ func wrapMain(args []string) {
 		return
 	}
 
-	killStaleUnder(input.User)
-
 	r := runCmd(input)
 
 	uploadResult(ctx, cli, input, r)
