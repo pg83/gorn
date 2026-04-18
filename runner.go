@@ -51,11 +51,12 @@ func runTaskOnEndpoint(ctx context.Context, ep Endpoint, task Task, s3cfg S3Conf
 
 func doRunTask(ctx context.Context, ep Endpoint, task Task, s3cfg S3Config, keyFile *os.File) (RunOutcome, string) {
 	input := WrapInput{
-		GUID: task.GUID,
-		Cmd:  task.Cmd,
-		Env:  task.Env,
-		User: ep.User,
-		S3:   s3cfg,
+		GUID:    task.GUID,
+		Cmd:     task.Cmd,
+		Env:     task.Env,
+		User:    ep.User,
+		S3:      s3cfg,
+		LogPath: ep.LogPath,
 	}
 
 	inputJSON := Throw2(json.Marshal(input))
@@ -89,7 +90,17 @@ func doRunTask(ctx context.Context, ep Endpoint, task Task, s3cfg S3Config, keyF
 	cmd.Stdout = &stdoutBuf
 	cmd.Stderr = &stderrBuf
 
-	_ = cmd.Run()
+	fmt.Fprintf(os.Stderr, "dispatch: task=%s ep=%s@%s:%d cmd=%v ssh_args=%v\n", task.GUID, ep.User, ep.Host, port, task.Cmd, sshArgs)
+
+	runErr := cmd.Run()
+
+	exitCode := -1
+
+	if cmd.ProcessState != nil {
+		exitCode = cmd.ProcessState.ExitCode()
+	}
+
+	fmt.Fprintf(os.Stderr, "dispatch: task=%s ep=%s@%s ssh_exit=%d run_err=%v stdout_len=%d stderr_len=%d\n", task.GUID, ep.User, ep.Host, exitCode, runErr, stdoutBuf.Len(), stderrBuf.Len())
 
 	outcome, detail := classify(stdoutBuf.String(), stderrBuf.String())
 
@@ -100,7 +111,7 @@ func classify(stdout, stderr string) (RunOutcome, string) {
 	finish := lastFinishMsg(stdout)
 
 	if finish == nil {
-		return OutcomeRetriable, "no finish message; stderr: " + stderr
+		return OutcomeRetriable, fmt.Sprintf("no finish message; stdout=%q stderr=%q", stdout, stderr)
 	}
 
 	if finish.Outcome == "already-done" {

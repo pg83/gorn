@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"sort"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -19,11 +20,12 @@ import (
 )
 
 type WrapInput struct {
-	GUID string            `json:"guid"`
-	Cmd  []string          `json:"cmd"`
-	Env  map[string]string `json:"env,omitempty"`
-	User string            `json:"user"`
-	S3   S3Config          `json:"s3"`
+	GUID    string            `json:"guid"`
+	Cmd     []string          `json:"cmd"`
+	Env     map[string]string `json:"env,omitempty"`
+	User    string            `json:"user"`
+	S3      S3Config          `json:"s3"`
+	LogPath string            `json:"log_path,omitempty"`
 }
 
 type WrapResult struct {
@@ -58,18 +60,40 @@ func wrapMain(args []string) {
 
 	input := readWrapInput()
 
+	log := openWrapLog(input.LogPath, input.GUID)
+	defer log.close()
+
+	exc := Try(func() {
+		wrapBody(input, log)
+	})
+
+	if exc != nil {
+		log.logf("wrap failed: %s", exc.Error())
+		panic(exc)
+	}
+}
+
+func wrapBody(input *WrapInput, log *wrapLog) {
+	host := Throw2(os.Hostname())
+	log.logf("wrap start: host=%s user=%s cmd=%v env_keys=%v s3=%s/%s", host, input.User, input.Cmd, sortedKeys(input.Env), input.S3.Endpoint, input.S3.Bucket)
+
 	ctx := context.Background()
 	cli := newS3Client(input.S3)
 
 	if wrapAlreadyDone(ctx, cli, input.S3.Bucket, input.GUID) {
+		log.logf("idempotency hit: result.json already in s3, emitting already-done")
 		emitFinish(FinishMsg{Type: "finish", GUID: input.GUID, Outcome: "already-done"})
 
 		return
 	}
 
+	log.logf("running command")
 	r := runCmd(input)
+	log.logf("command finished: exit=%d duration=%.3fs stdout_len=%d stderr_len=%d", r.ExitCode, r.FinishedAt.Sub(r.StartedAt).Seconds(), len(r.Stdout), len(r.Stderr))
 
+	log.logf("uploading to s3 bucket=%s prefix=gorn/%s/", input.S3.Bucket, input.GUID)
 	uploadResult(ctx, cli, input, r)
+	log.logf("upload done")
 
 	emitFinish(FinishMsg{
 		Type:    "finish",
@@ -77,6 +101,62 @@ func wrapMain(args []string) {
 		Outcome: "completed",
 		Exit:    r.ExitCode,
 	})
+
+	log.logf("finish emitted: outcome=completed exit=%d", r.ExitCode)
+}
+
+type wrapLog struct {
+	f    *os.File
+	guid string
+}
+
+func openWrapLog(path, guid string) *wrapLog {
+	if path == "" {
+		return &wrapLog{guid: guid}
+	}
+
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "wrap: log open failed:", err)
+
+		return &wrapLog{guid: guid}
+	}
+
+	return &wrapLog{f: f, guid: guid}
+}
+
+func (l *wrapLog) logf(format string, args ...any) {
+	if l == nil || l.f == nil {
+		return
+	}
+
+	msg := fmt.Sprintf(format, args...)
+	line := fmt.Sprintf("[%s] guid=%s %s\n", time.Now().UTC().Format(time.RFC3339Nano), l.guid, msg)
+
+	_, _ = l.f.WriteString(line)
+}
+
+func (l *wrapLog) close() {
+	if l != nil && l.f != nil {
+		_ = l.f.Close()
+	}
+}
+
+func sortedKeys(m map[string]string) []string {
+	if len(m) == 0 {
+		return nil
+	}
+
+	keys := make([]string, 0, len(m))
+
+	for k := range m {
+		keys = append(keys, k)
+	}
+
+	sort.Strings(keys)
+
+	return keys
 }
 
 func readWrapInput() *WrapInput {

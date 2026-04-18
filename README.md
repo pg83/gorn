@@ -52,7 +52,9 @@ JSON. Example: [`config.example.json`](config.example.json). Path is passed via 
 
 Fields:
 
-- `endpoints[]`: list of `{host, user, path}`. Each endpoint may also carry an `ssh_key`: the PEM body of the private key to use for this endpoint. When set, it overrides the global `ssh_key_path`. The body is loaded into an anonymous **memfd** (`memfd_create` with `MFD_CLOEXEC`), `fchmod`'d to `0600`, and passed to the `ssh` child process via `ExtraFiles`; the child sees it at `/proc/self/fd/3` and `ssh -i /proc/self/fd/3` reads it there. Key material never touches the filesystem.
+- `endpoints[]`: list of `{host, user, path}`. Each endpoint may also carry:
+  - `ssh_key`: the PEM body of the private key to use for this endpoint. When set, it overrides the global `ssh_key_path`. The body is loaded into an anonymous **memfd** (`memfd_create` with `MFD_CLOEXEC`), `fchmod`'d to `0600`, and passed to the `ssh` child process via `ExtraFiles`; the child sees it at `/proc/self/fd/3` and `ssh -i /proc/self/fd/3` reads it there. Key material never touches the filesystem.
+  - `log_path`: path on the **worker** where `gorn wrap` will append per-task diagnostic lines (start, idempotency check, command exit, S3 upload, finish emit, any error). The path is sent to the worker as part of the wrap stdin JSON; the worker `gorn wrap` opens it `O_APPEND|O_CREATE|O_WRONLY` mode `0600`. If unset, no log is written. Useful for debugging cases where the daemon sees no finish message — the worker log shows whether `wrap` ran at all.
 - `etcd.endpoints[]`: etcd cluster URLs. Accepts `host:port` or `scheme://host:port` — the etcd v3 client handles both.
 - `s3`: `{endpoint, region, bucket, access_key, secret_key, use_path_style}`. `endpoint` empty means AWS default. `use_path_style=true` for MinIO.
 - `ssh_key_path`: private key the daemon uses to connect to endpoints. Optional if every endpoint provides its own `ssh_key`.
