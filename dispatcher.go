@@ -11,10 +11,10 @@ import (
 )
 
 type Dispatcher struct {
-	cli        *clientv3.Client
-	leader     *Leader
-	cfg        *Config
-	sshKeyPath string
+	cli      *clientv3.Client
+	leader   *Leader
+	cfg      *Config
+	keyFiles []*os.File
 
 	mu       sync.Mutex
 	inflight map[string]struct{}
@@ -22,14 +22,14 @@ type Dispatcher struct {
 	wake chan struct{}
 }
 
-func NewDispatcher(cli *clientv3.Client, leader *Leader, cfg *Config, sshKeyPath string) *Dispatcher {
+func NewDispatcher(cli *clientv3.Client, leader *Leader, cfg *Config, keyFiles []*os.File) *Dispatcher {
 	return &Dispatcher{
-		cli:        cli,
-		leader:     leader,
-		cfg:        cfg,
-		sshKeyPath: sshKeyPath,
-		inflight:   make(map[string]struct{}),
-		wake:       make(chan struct{}, 1),
+		cli:      cli,
+		leader:   leader,
+		cfg:      cfg,
+		keyFiles: keyFiles,
+		inflight: make(map[string]struct{}),
+		wake:     make(chan struct{}, 1),
 	}
 }
 
@@ -53,14 +53,14 @@ func (d *Dispatcher) Run(ctx context.Context) {
 		})
 	}()
 
-	for _, ep := range d.cfg.Endpoints {
+	for i, ep := range d.cfg.Endpoints {
 		wg.Add(1)
 
-		go func(ep Endpoint) {
+		go func(ep Endpoint, keyFile *os.File) {
 			defer wg.Done()
 
-			d.endpointLoop(ctx, ep)
-		}(ep)
+			d.endpointLoop(ctx, ep, keyFile)
+		}(ep, d.keyFiles[i])
 	}
 
 	wg.Wait()
@@ -83,10 +83,10 @@ func (d *Dispatcher) signal() {
 	}
 }
 
-func (d *Dispatcher) endpointLoop(ctx context.Context, ep Endpoint) {
+func (d *Dispatcher) endpointLoop(ctx context.Context, ep Endpoint, keyFile *os.File) {
 	for ctx.Err() == nil {
 		exc := Try(func() {
-			d.oneIteration(ctx, ep)
+			d.oneIteration(ctx, ep, keyFile)
 		})
 
 		exc.Catch(func(e *Exception) {
@@ -97,7 +97,7 @@ func (d *Dispatcher) endpointLoop(ctx context.Context, ep Endpoint) {
 	}
 }
 
-func (d *Dispatcher) oneIteration(ctx context.Context, ep Endpoint) {
+func (d *Dispatcher) oneIteration(ctx context.Context, ep Endpoint, keyFile *os.File) {
 	task, ok := d.pickNextTask(ctx)
 
 	if !ok {
@@ -112,7 +112,7 @@ func (d *Dispatcher) oneIteration(ctx context.Context, ep Endpoint) {
 
 	defer d.releaseInflight(task.GUID)
 
-	outcome, detail := runTaskOnEndpoint(ctx, ep, task, d.cfg.S3, d.sshKeyPath)
+	outcome, detail := runTaskOnEndpoint(ctx, ep, task, d.cfg.S3, keyFile)
 
 	fmt.Fprintf(os.Stderr, "task %s on %s@%s: %s (%s)\n", task.GUID, ep.User, ep.Host, outcome, detail)
 

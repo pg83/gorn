@@ -52,10 +52,10 @@ JSON. Example: [`config.example.json`](config.example.json). Path is passed via 
 
 Fields:
 
-- `endpoints[]`: list of `{host, user, path}`.
+- `endpoints[]`: list of `{host, user, path}`. Optional `ssh_key`: PEM body of the private key for this endpoint; overrides the global `ssh_key_path`. The body is held in an anonymous memfd — not written to the filesystem — and passed to `ssh` via an inherited fd. Combine with `${VAR}` expansion to inject from env.
 - `etcd.endpoints[]`: etcd cluster URLs.
 - `s3`: `{endpoint, region, bucket, access_key, secret_key, use_path_style}`. `endpoint` empty means AWS default. `use_path_style=true` for MinIO.
-- `ssh_key_path`: private key the daemon uses to connect to endpoints.
+- `ssh_key_path`: private key the daemon uses to connect to endpoints. Optional if every endpoint provides its own `ssh_key`.
 
 ## Build
 

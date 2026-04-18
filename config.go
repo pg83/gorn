@@ -23,10 +23,11 @@ func expandEnv(s string) string {
 }
 
 type Endpoint struct {
-	Host string `json:"host"`
-	Port int    `json:"port,omitempty"`
-	User string `json:"user"`
-	Path string `json:"path"`
+	Host   string `json:"host"`
+	Port   int    `json:"port,omitempty"`
+	User   string `json:"user"`
+	Path   string `json:"path"`
+	SSHKey string `json:"ssh_key,omitempty"`
 }
 
 type EtcdConfig struct {

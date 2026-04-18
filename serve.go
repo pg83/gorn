@@ -20,10 +20,6 @@ func serveMain(args []string) {
 
 	cfg := LoadConfig(*configPath)
 
-	if cfg.SSHKeyPath == "" {
-		ThrowFmt("serve: ssh_key_path is required in config")
-	}
-
 	if len(cfg.Endpoints) == 0 {
 		ThrowFmt("serve: at least one endpoint is required in config")
 	}
@@ -32,7 +28,18 @@ func serveMain(args []string) {
 		ThrowFmt("serve: etcd.endpoints is required in config")
 	}
 
-	Throw2(os.Stat(cfg.SSHKeyPath))
+	for i, ep := range cfg.Endpoints {
+		if ep.SSHKey == "" && cfg.SSHKeyPath == "" {
+			ThrowFmt("serve: endpoint %d (%s@%s) has no ssh_key and global ssh_key_path is unset", i, ep.User, ep.Host)
+		}
+	}
+
+	if cfg.SSHKeyPath != "" {
+		Throw2(os.Stat(cfg.SSHKeyPath))
+	}
+
+	keyFiles, cleanupKeys := materializeSSHKeys(cfg.Endpoints, cfg.SSHKeyPath)
+	defer cleanupKeys()
 
 	cli := newEtcdClient(cfg.Etcd)
 	defer cli.Close()
@@ -64,7 +71,7 @@ func serveMain(args []string) {
 		os.Exit(0)
 	}()
 
-	disp := NewDispatcher(cli, leader, cfg, cfg.SSHKeyPath)
+	disp := NewDispatcher(cli, leader, cfg, keyFiles)
 	disp.Run(ctx)
 
 	leader.Resign(context.Background())

@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -32,12 +33,12 @@ func (o RunOutcome) String() string {
 	return "unknown"
 }
 
-func runTaskOnEndpoint(ctx context.Context, ep Endpoint, task Task, s3cfg S3Config, sshKeyPath string) (outcome RunOutcome, detail string) {
+func runTaskOnEndpoint(ctx context.Context, ep Endpoint, task Task, s3cfg S3Config, keyFile *os.File) (outcome RunOutcome, detail string) {
 	outcome = OutcomeRetriable
 	detail = ""
 
 	exc := Try(func() {
-		outcome, detail = doRunTask(ctx, ep, task, s3cfg, sshKeyPath)
+		outcome, detail = doRunTask(ctx, ep, task, s3cfg, keyFile)
 	})
 
 	exc.Catch(func(e *Exception) {
@@ -48,7 +49,7 @@ func runTaskOnEndpoint(ctx context.Context, ep Endpoint, task Task, s3cfg S3Conf
 	return outcome, detail
 }
 
-func doRunTask(ctx context.Context, ep Endpoint, task Task, s3cfg S3Config, sshKeyPath string) (RunOutcome, string) {
+func doRunTask(ctx context.Context, ep Endpoint, task Task, s3cfg S3Config, keyFile *os.File) (RunOutcome, string) {
 	input := WrapInput{
 		GUID: task.GUID,
 		Cmd:  task.Cmd,
@@ -70,7 +71,7 @@ func doRunTask(ctx context.Context, ep Endpoint, task Task, s3cfg S3Config, sshK
 	}
 
 	sshArgs := []string{
-		"-i", sshKeyPath,
+		"-i", sshKeyFdPath,
 		"-p", strconv.Itoa(port),
 		"-o", "BatchMode=yes",
 		"-o", "StrictHostKeyChecking=accept-new",
@@ -81,6 +82,7 @@ func doRunTask(ctx context.Context, ep Endpoint, task Task, s3cfg S3Config, sshK
 	}
 
 	cmd := exec.CommandContext(ctx, "ssh", sshArgs...)
+	cmd.ExtraFiles = []*os.File{keyFile}
 
 	var stdoutBuf, stderrBuf bytes.Buffer
 	cmd.Stdin = bytes.NewReader(inputJSON)
