@@ -78,9 +78,16 @@ func wrapBody(input *WrapInput, log *wrapLog) {
 	log.logf("wrap start: host=%s user=%s cmd=%v env_keys=%v s3=%s/%s", host, input.User, input.Cmd, sortedKeys(input.Env), input.S3.Endpoint, input.S3.Bucket)
 
 	ctx := context.Background()
-	cli := newS3Client(input.S3)
 
-	if wrapAlreadyDone(ctx, cli, input.S3.Bucket, input.GUID) {
+	t := time.Now()
+	cli := newS3Client(input.S3)
+	log.logf("s3 client ready took=%.3fs", time.Since(t).Seconds())
+
+	t = time.Now()
+	already := wrapAlreadyDone(ctx, cli, input.S3.Bucket, input.GUID)
+	log.logf("s3 head (idempotency) took=%.3fs already_done=%v", time.Since(t).Seconds(), already)
+
+	if already {
 		log.logf("idempotency hit: result.json already in s3, emitting already-done")
 		emitFinish(FinishMsg{Type: "finish", GUID: input.GUID, Outcome: "already-done"})
 
@@ -92,7 +99,7 @@ func wrapBody(input *WrapInput, log *wrapLog) {
 	log.logf("command finished: exit=%d duration=%.3fs stdout_len=%d stderr_len=%d", r.ExitCode, r.FinishedAt.Sub(r.StartedAt).Seconds(), len(r.Stdout), len(r.Stderr))
 
 	log.logf("uploading to s3 bucket=%s prefix=gorn/%s/", input.S3.Bucket, input.GUID)
-	uploadResult(ctx, cli, input, r)
+	uploadResult(ctx, cli, input, r, log)
 	log.logf("upload done")
 
 	emitFinish(FinishMsg{
@@ -118,7 +125,9 @@ func openWrapLog(path, guid string) *wrapLog {
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
 
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "wrap: log open failed:", err)
+		uid, gid := os.Getuid(), os.Getgid()
+		wd, _ := os.Getwd()
+		fmt.Fprintf(os.Stderr, "wrap: log open failed: path=%q uid=%d gid=%d cwd=%q err=%v\n", path, uid, gid, wd, err)
 
 		return &wrapLog{guid: guid}
 	}
@@ -273,11 +282,11 @@ func runCmd(in *WrapInput) cmdResult {
 	}
 }
 
-func uploadResult(ctx context.Context, cli *s3.Client, in *WrapInput, r cmdResult) {
+func uploadResult(ctx context.Context, cli *s3.Client, in *WrapInput, r cmdResult, log *wrapLog) {
 	bucket := in.S3.Bucket
 
-	putBytes(ctx, cli, bucket, streamKey(in.GUID, "stdout"), r.Stdout)
-	putBytes(ctx, cli, bucket, streamKey(in.GUID, "stderr"), r.Stderr)
+	putBytes(ctx, cli, bucket, streamKey(in.GUID, "stdout"), r.Stdout, log)
+	putBytes(ctx, cli, bucket, streamKey(in.GUID, "stderr"), r.Stderr, log)
 
 	host := Throw2(os.Hostname())
 
@@ -293,16 +302,19 @@ func uploadResult(ctx context.Context, cli *s3.Client, in *WrapInput, r cmdResul
 
 	payload := Throw2(json.Marshal(result))
 
-	putBytes(ctx, cli, bucket, resultKey(in.GUID), payload)
+	putBytes(ctx, cli, bucket, resultKey(in.GUID), payload, log)
 }
 
-func putBytes(ctx context.Context, cli *s3.Client, bucket, key string, data []byte) {
+func putBytes(ctx context.Context, cli *s3.Client, bucket, key string, data []byte, log *wrapLog) {
+	t := time.Now()
 	_ = Throw2(cli.PutObject(ctx, &s3.PutObjectInput{
 		Bucket:        aws.String(bucket),
 		Key:           aws.String(key),
 		Body:          bytes.NewReader(data),
 		ContentLength: aws.Int64(int64(len(data))),
 	}))
+
+	log.logf("s3 put key=%s size=%d took=%.3fs", key, len(data), time.Since(t).Seconds())
 }
 
 func emitFinish(msg FinishMsg) {

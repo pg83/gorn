@@ -15,10 +15,27 @@ fi
 
 SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new)
 
+INSTALL_CMD='cat > gorn.new && chmod +x gorn.new && mv gorn.new /bin/gorn && (pkill -x gorn || true)'
+
+# Truncate daemon/control/worker log files after install so each redeploy starts fresh.
+# Guard each with [ -f ] so missing files are silently skipped (no shell redirection errors).
+TRUNCATE_CMD='
+for p in /var/run/gorn/std/current /var/run/gorn_ctl/std/current; do
+    [ -f "$p" ] && : > "$p"
+done
+for x in 0 1 2 3 4; do
+    f="/var/run/gorn_${x}/std/current"
+    [ -f "$f" ] && : > "$f"
+    f="/var/run/gorn_${x}/std/log/agent.log"
+    [ -f "$f" ] && : > "$f"
+done
+true
+'
+
 for host in "$@"; do
     echo "=== $host ==="
 
-    if ! ssh "${SSH_OPTS[@]}" "$host" 'cat > gorn.new && chmod +x gorn.new && mv gorn.new /bin/gorn && (pkill -x gorn || true)' < "$BIN"; then
+    if ! ssh "${SSH_OPTS[@]}" "$host" "$INSTALL_CMD; $TRUNCATE_CMD" < "$BIN"; then
         echo "  install failed" >&2
         continue
     fi

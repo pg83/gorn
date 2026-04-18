@@ -1,3 +1,4 @@
 /gorn
 *.test
 *.exe
+/log

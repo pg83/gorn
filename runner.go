@@ -91,7 +91,7 @@ func doRunTask(ctx context.Context, ep Endpoint, task Task, s3cfg S3Config, keyF
 	cmd.Stdout = &stdoutBuf
 	cmd.Stderr = &stderrBuf
 
-	fmt.Fprintf(os.Stderr, "dispatch: task=%s ep=%s@%s:%d cmd=%v ssh_args=%v\n", task.GUID, ep.User, ep.Host, port, task.Cmd, sshArgs)
+	fmt.Fprintf(os.Stderr, "dispatch: task=%s ep=%s@%s:%d log_path=%q cmd=%v ssh_args=%v\n", task.GUID, ep.User, ep.Host, port, ep.LogPath, task.Cmd, sshArgs)
 
 	runErr := cmd.Run()
 
@@ -102,6 +102,10 @@ func doRunTask(ctx context.Context, ep Endpoint, task Task, s3cfg S3Config, keyF
 	}
 
 	fmt.Fprintf(os.Stderr, "dispatch: task=%s ep=%s@%s ssh_exit=%d run_err=%v stdout_len=%d stderr_len=%d\n", task.GUID, ep.User, ep.Host, exitCode, runErr, stdoutBuf.Len(), stderrBuf.Len())
+
+	if stderrBuf.Len() > 0 {
+		fmt.Fprintf(os.Stderr, "dispatch: task=%s ep=%s@%s stderr:\n%s", task.GUID, ep.User, ep.Host, stderrBuf.String())
+	}
 
 	outcome, detail := classify(stdoutBuf.String(), stderrBuf.String())
 
