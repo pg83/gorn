@@ -3,8 +3,24 @@ package main
 import (
 	"encoding/json"
 	"os"
+	"regexp"
 	"strings"
 )
+
+var envRefRe = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
+
+func expandEnv(s string) string {
+	return envRefRe.ReplaceAllStringFunc(s, func(m string) string {
+		name := m[2 : len(m)-1]
+		v, ok := os.LookupEnv(name)
+
+		if !ok {
+			ThrowFmt("config references unset env var ${%s}", name)
+		}
+
+		return v
+	})
+}
 
 type Endpoint struct {
 	Host string `json:"host"`
@@ -36,9 +52,10 @@ type Config struct {
 
 func LoadConfig(path string) *Config {
 	data := Throw2(os.ReadFile(path))
+	expanded := expandEnv(string(data))
 
 	var cfg Config
-	Throw(json.Unmarshal(data, &cfg))
+	Throw(json.Unmarshal([]byte(expanded), &cfg))
 
 	if v := os.Getenv("ETCDCTL_ENDPOINTS"); v != "" {
 		parts := strings.Split(v, ",")
