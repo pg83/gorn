@@ -45,6 +45,10 @@ type EtcdConfig struct {
 	Endpoints []string `json:"endpoints"`
 }
 
+type ControlConfig struct {
+	Listen string `json:"listen"`
+}
+
 type S3Config struct {
 	Endpoint     string `json:"endpoint"`
 	Region       string `json:"region"`
@@ -55,11 +59,12 @@ type S3Config struct {
 }
 
 type Config struct {
-	Endpoints      []Endpoint `json:"endpoints"`
-	Etcd           EtcdConfig `json:"etcd"`
-	S3             S3Config   `json:"s3"`
-	SSHKeyPath     string     `json:"ssh_key_path"`
-	RemoteWrapPath string     `json:"remote_wrap_path,omitempty"`
+	Endpoints      []Endpoint    `json:"endpoints"`
+	Etcd           EtcdConfig    `json:"etcd"`
+	S3             S3Config      `json:"s3"`
+	Control        ControlConfig `json:"control,omitempty"`
+	SSHKeyPath     string        `json:"ssh_key_path"`
+	RemoteWrapPath string        `json:"remote_wrap_path,omitempty"`
 }
 
 func LoadConfig(path string) *Config {

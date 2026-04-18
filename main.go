@@ -17,6 +17,8 @@ func main() {
 		switch sub {
 		case "serve":
 			serveMain(args)
+		case "control":
+			controlMain(args)
 		case "wrap":
 			wrapMain(args)
 		case "ignite":

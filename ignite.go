@@ -1,15 +1,18 @@
 package main
 
 import (
-	"context"
+	"bytes"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"strings"
-
-	clientv3 "go.etcd.io/etcd/client/v3"
+	"time"
 )
 
 type stringsFlag []string
@@ -24,20 +27,19 @@ func (s *stringsFlag) Set(v string) error {
 	return nil
 }
 
+var igniteHTTP = &http.Client{Timeout: 30 * time.Second}
+
 func igniteMain(args []string) {
 	fs := flag.NewFlagSet("ignite", flag.ExitOnError)
 
 	guid := fs.String("guid", "", "task GUID; auto-generated UUIDv4 if empty")
-	etcdFlag := fs.String("etcd-endpoints", "", "comma-separated etcd endpoints; falls back to $ETCDCTL_ENDPOINTS")
+	apiFlag := fs.String("api", "", "gorn control API URL; falls back to $GORN_API")
+	wait := fs.Bool("wait", false, "wait for task completion, print stdout/stderr, exit with task exit code")
 
 	var envs stringsFlag
 	fs.Var(&envs, "env", "KEY=VALUE (repeatable)")
 
 	Throw(fs.Parse(args))
-
-	if *guid == "" {
-		*guid = newGUID()
-	}
 
 	cmdArgs := fs.Args()
 
@@ -45,21 +47,40 @@ func igniteMain(args []string) {
 		ThrowFmt("ignite: command is required after flags (use -- to separate)")
 	}
 
-	endpoints := resolveEtcdEndpoints(*etcdFlag)
+	api := resolveAPI(*apiFlag)
 
-	if len(endpoints) == 0 {
-		ThrowFmt("ignite: etcd endpoints required (pass --etcd-endpoints or set ETCDCTL_ENDPOINTS)")
+	if api == "" {
+		ThrowFmt("ignite: --api is required (or set $GORN_API)")
 	}
 
-	task := Task{
-		GUID: *guid,
-		Cmd:  cmdArgs,
-		Env:  parseEnvs(envs),
+	taskGUID := *guid
+
+	if taskGUID == "" {
+		taskGUID = newGUID()
 	}
 
-	enqueueTask(EtcdConfig{Endpoints: endpoints}, task)
+	req := EnqueueReq{GUID: taskGUID, Cmd: cmdArgs, Env: parseEnvs(envs)}
+	got := apiEnqueue(api, req)
 
-	fmt.Println(task.GUID)
+	if !*wait {
+		fmt.Println(got.GUID)
+
+		return
+	}
+
+	waitForDone(api, got.GUID)
+
+	exitCode := fetchAndPrintOutput(api, got.GUID)
+
+	os.Exit(exitCode)
+}
+
+func resolveAPI(flagVal string) string {
+	if flagVal != "" {
+		return flagVal
+	}
+
+	return os.Getenv("GORN_API")
 }
 
 func newGUID() string {
@@ -70,18 +91,6 @@ func newGUID() string {
 	b[8] = (b[8] & 0x3f) | 0x80
 
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
-}
-
-func resolveEtcdEndpoints(flagVal string) []string {
-	if flagVal != "" {
-		return splitTrimCSV(flagVal)
-	}
-
-	if v := os.Getenv("ETCDCTL_ENDPOINTS"); v != "" {
-		return splitTrimCSV(v)
-	}
-
-	return nil
 }
 
 func parseEnvs(envs []string) map[string]string {
@@ -104,22 +113,80 @@ func parseEnvs(envs []string) map[string]string {
 	return out
 }
 
-func enqueueTask(etcd EtcdConfig, task Task) {
-	cli := newEtcdClient(etcd)
-	defer cli.Close()
+func apiEnqueue(api string, req EnqueueReq) EnqueueResp {
+	body := Throw2(json.Marshal(req))
+	target := strings.TrimRight(api, "/") + "/v1/tasks"
 
-	payload := Throw2(json.Marshal(task))
+	resp := Throw2(igniteHTTP.Post(target, "application/json", bytes.NewReader(body)))
+	defer resp.Body.Close()
 
-	key := queueKey(task.GUID)
+	data := Throw2(io.ReadAll(resp.Body))
 
-	ctx := context.Background()
-
-	resp := Throw2(cli.Txn(ctx).
-		If(clientv3.Compare(clientv3.CreateRevision(key), "=", 0)).
-		Then(clientv3.OpPut(key, string(payload))).
-		Commit())
-
-	if !resp.Succeeded {
-		ThrowFmt("ignite: task with guid %q already exists in queue", task.GUID)
+	if resp.StatusCode != http.StatusOK {
+		ThrowFmt("ignite: enqueue failed: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
 	}
+
+	var out EnqueueResp
+	Throw(json.Unmarshal(data, &out))
+
+	return out
+}
+
+func apiGetState(api, guid string) string {
+	target := strings.TrimRight(api, "/") + "/v1/tasks/" + url.PathEscape(guid)
+	resp := Throw2(igniteHTTP.Get(target))
+	defer resp.Body.Close()
+
+	data := Throw2(io.ReadAll(resp.Body))
+
+	if resp.StatusCode != http.StatusOK {
+		ThrowFmt("ignite: state query failed: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
+	}
+
+	var sr StateResp
+	Throw(json.Unmarshal(data, &sr))
+
+	return sr.State
+}
+
+func waitForDone(api, guid string) {
+	for {
+		state := apiGetState(api, guid)
+
+		if state == "done" {
+			return
+		}
+
+		if state == "not_found" {
+			ThrowFmt("ignite: task %q vanished (neither queued nor done)", guid)
+		}
+
+		time.Sleep(500 * time.Millisecond)
+	}
+}
+
+func fetchAndPrintOutput(api, guid string) int {
+	target := strings.TrimRight(api, "/") + "/v1/tasks/" + url.PathEscape(guid) + "/output"
+	resp := Throw2(igniteHTTP.Get(target))
+	defer resp.Body.Close()
+
+	data := Throw2(io.ReadAll(resp.Body))
+
+	if resp.StatusCode != http.StatusOK {
+		ThrowFmt("ignite: output query failed: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
+	}
+
+	var out OutputResp
+	Throw(json.Unmarshal(data, &out))
+
+	stdout := Throw2(base64.StdEncoding.DecodeString(out.StdoutB64))
+	stderr := Throw2(base64.StdEncoding.DecodeString(out.StderrB64))
+
+	Throw2(os.Stdout.Write(stdout))
+	Throw2(os.Stderr.Write(stderr))
+
+	var result WrapResult
+	Throw(json.Unmarshal(out.Result, &result))
+
+	return result.ExitCode
 }

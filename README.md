@@ -39,12 +39,32 @@ Designed for a homelab: three nodes run the daemon, one is elected leader via et
 ## Subcommands
 
 ```
-gorn serve  --config path                                              # daemon, run on every HA node
+gorn serve   --config path                                             # daemon, runs on every HA node; elects leader, dispatches
+gorn control --config path                                             # HTTP JSON RPC in front of etcd + S3; used by ignite
 gorn wrap                                                              # invoked on workers via ssh, reads stdin JSON
-gorn ignite [--etcd-endpoints a,b,c] --guid G [--env K=V ...] -- cmd args...
+gorn ignite  --api URL [--guid G] [--env K=V ...] [--wait] -- cmd args...
 ```
 
-`serve` needs etcd, S3, and SSH keys (so it takes the full JSON config). `ignite` only touches etcd, so it takes etcd endpoints directly via `--etcd-endpoints` or `$ETCDCTL_ENDPOINTS` and does not load the JSON config at all. `wrap` only touches S3, `/proc`, and `exec`.
+`serve` needs etcd, S3, and SSH keys — it does leader election and dispatches tasks. `control` takes the same JSON config and exposes an HTTP API for enqueueing and querying tasks; it does not participate in dispatch. `ignite` is a thin HTTP client: it posts to the `control` endpoint and has no etcd or S3 knowledge. `wrap` only touches S3, `/proc`, and `exec`.
+
+### Control API
+
+`control` listens on `control.listen` and speaks JSON.
+
+- `POST /v1/tasks` with body `{"guid": "...", "cmd": [...], "env": {...}}`. `guid` is optional — the server generates a UUIDv4 if missing. Returns `{"guid": "..."}` on 200, or 409 if the GUID is already queued.
+- `GET /v1/tasks/<guid>` → `{"guid": "...", "state": "queued" | "done" | "not_found"}`. `queued` means the etcd key still exists (waiting or retrying); `done` means the key is gone and `result.json` is in S3; `not_found` means neither.
+- `GET /v1/tasks/<guid>/output` → `{"result": {...}, "stdout_b64": "...", "stderr_b64": "..."}` on 200, or 404 if `result.json` is not yet in S3. `result` is the parsed `result.json`; `stdout_b64` / `stderr_b64` are base64-encoded full streams (never truncated).
+
+Since enqueue is a compare-revision-zero etcd txn, any `control` instance can serve `POST /v1/tasks` — leadership is not required.
+
+### ignite
+
+```
+gorn ignite --api http://localhost:7878 --guid mytask -- echo hi       # enqueue, print guid, exit
+gorn ignite --api http://localhost:7878 --wait -- false                # enqueue, wait, print stdout/stderr, exit with task exit code
+```
+
+`--api` can also come from `$GORN_API`. With `--wait` ignite polls `/v1/tasks/<guid>` every 500ms until state is `done`, then fetches `/output`, writes stdout/stderr to its own fds, and exits with the task's `exit_code`.
 
 ## Configuration
 
@@ -57,6 +77,7 @@ Fields:
   - `log_path`: path on the **worker** where `gorn wrap` will append per-task diagnostic lines (start, idempotency check, command exit, S3 upload, finish emit, any error). The path is sent to the worker as part of the wrap stdin JSON; the worker `gorn wrap` opens it `O_APPEND|O_CREATE|O_WRONLY` mode `0600`. If unset, no log is written. Useful for debugging cases where the daemon sees no finish message — the worker log shows whether `wrap` ran at all.
 - `etcd.endpoints[]`: etcd cluster URLs. Accepts `host:port` or `scheme://host:port` — the etcd v3 client handles both.
 - `s3`: `{endpoint, region, bucket, access_key, secret_key, use_path_style}`. `endpoint` empty means AWS default. `use_path_style=true` for MinIO.
+- `control.listen`: address for `gorn control` to bind its HTTP JSON RPC, e.g. `"127.0.0.1:7878"`. Required only for `control`; `serve` ignores it.
 - `ssh_key_path`: private key the daemon uses to connect to endpoints. Optional if every endpoint provides its own `ssh_key`.
 
 ### `${VAR}` expansion
@@ -94,7 +115,7 @@ These are a convenience for deployments that already inject credentials via the 
 go build ./...
 ```
 
-Produces a single `gorn` binary that holds all subcommands. Deploy the same binary to HA nodes (for `serve` / `ignite`) and to workers (for `wrap` — must be in the endpoint user's `PATH`).
+Produces a single `gorn` binary that holds all subcommands. Deploy the same binary to HA nodes (for `serve` / `control`) and to workers (for `wrap` — must be in the endpoint user's `PATH`). `ignite` can run anywhere that can reach a `control` endpoint.
 
 ## Test
 
