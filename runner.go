@@ -71,8 +71,10 @@ func doRunTask(ctx context.Context, ep Endpoint, task Task, s3cfg S3Config, keyF
 		port = 22
 	}
 
+	keyPath := fmt.Sprintf("/proc/%d/fd/%d", os.Getpid(), keyFile.Fd())
+
 	sshArgs := []string{
-		"-i", sshKeyFdPath,
+		"-i", keyPath,
 		"-p", strconv.Itoa(port),
 		"-o", "BatchMode=yes",
 		"-o", "StrictHostKeyChecking=accept-new",
@@ -82,8 +84,7 @@ func doRunTask(ctx context.Context, ep Endpoint, task Task, s3cfg S3Config, keyF
 		remoteCmd,
 	}
 
-	cmd := exec.CommandContext(ctx, "ssh", sshArgs...)
-	cmd.ExtraFiles = []*os.File{keyFile}
+	cmd := exec.CommandContext(ctx, resolveSSH(), sshArgs...)
 
 	var stdoutBuf, stderrBuf bytes.Buffer
 	cmd.Stdin = bytes.NewReader(inputJSON)
@@ -156,4 +157,22 @@ func lastFinishMsg(stdout string) *FinishMsg {
 
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+func resolveSSH() string {
+	p, err := exec.LookPath("ssh")
+
+	if err == nil {
+		return p
+	}
+
+	for _, cand := range []string{"/usr/bin/ssh", "/bin/ssh", "/usr/local/bin/ssh"} {
+		if _, statErr := os.Stat(cand); statErr == nil {
+			return cand
+		}
+	}
+
+	ThrowFmt("ssh: executable not found in PATH or /usr/bin, /bin, /usr/local/bin (lookup err: %v)", err)
+
+	return ""
 }

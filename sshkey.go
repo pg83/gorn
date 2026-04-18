@@ -7,8 +7,6 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-const sshKeyFdPath = "/proc/self/fd/3"
-
 func materializeSSHKeys(endpoints []Endpoint, fallback string) ([]*os.File, func()) {
 	files := make([]*os.File, len(endpoints))
 
