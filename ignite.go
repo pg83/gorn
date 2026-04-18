@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -26,7 +27,7 @@ func (s *stringsFlag) Set(v string) error {
 func igniteMain(args []string) {
 	fs := flag.NewFlagSet("ignite", flag.ExitOnError)
 
-	guid := fs.String("guid", "", "task GUID (required)")
+	guid := fs.String("guid", "", "task GUID; auto-generated UUIDv4 if empty")
 	etcdFlag := fs.String("etcd-endpoints", "", "comma-separated etcd endpoints; falls back to $ETCDCTL_ENDPOINTS")
 
 	var envs stringsFlag
@@ -35,7 +36,7 @@ func igniteMain(args []string) {
 	Throw(fs.Parse(args))
 
 	if *guid == "" {
-		ThrowFmt("ignite: --guid is required")
+		*guid = newGUID()
 	}
 
 	cmdArgs := fs.Args()
@@ -59,6 +60,16 @@ func igniteMain(args []string) {
 	enqueueTask(EtcdConfig{Endpoints: endpoints}, task)
 
 	fmt.Println(task.GUID)
+}
+
+func newGUID() string {
+	b := make([]byte, 16)
+	Throw2(rand.Read(b))
+
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
+
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
 
 func resolveEtcdEndpoints(flagVal string) []string {
