@@ -153,7 +153,7 @@ def main():
     subprocess.run(
         [
             str(gorn_bin), "ignite",
-            "--config", str(cfg_path),
+            "--etcd-endpoints", ",".join(etcd),
             "--guid", guid,
             "--",
             "sh", "-c",

@@ -9,6 +9,16 @@ import (
 
 var envRefRe = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
 
+func splitTrimCSV(s string) []string {
+	parts := strings.Split(s, ",")
+
+	for i, p := range parts {
+		parts[i] = strings.TrimSpace(p)
+	}
+
+	return parts
+}
+
 func expandEnv(s string) string {
 	return envRefRe.ReplaceAllStringFunc(s, func(m string) string {
 		name := m[2 : len(m)-1]
@@ -59,13 +69,7 @@ func LoadConfig(path string) *Config {
 	Throw(json.Unmarshal([]byte(expanded), &cfg))
 
 	if v := os.Getenv("ETCDCTL_ENDPOINTS"); v != "" {
-		parts := strings.Split(v, ",")
-
-		for i, p := range parts {
-			parts[i] = strings.TrimSpace(p)
-		}
-
-		cfg.Etcd.Endpoints = parts
+		cfg.Etcd.Endpoints = splitTrimCSV(v)
 	}
 
 	if v := os.Getenv("AWS_ACCESS_KEY_ID"); v != "" {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"os"
 	"strings"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
@@ -25,17 +26,13 @@ func (s *stringsFlag) Set(v string) error {
 func igniteMain(args []string) {
 	fs := flag.NewFlagSet("ignite", flag.ExitOnError)
 
-	configPath := fs.String("config", "", "path to JSON config (required)")
 	guid := fs.String("guid", "", "task GUID (required)")
+	etcdFlag := fs.String("etcd-endpoints", "", "comma-separated etcd endpoints; falls back to $ETCDCTL_ENDPOINTS")
 
 	var envs stringsFlag
 	fs.Var(&envs, "env", "KEY=VALUE (repeatable)")
 
 	Throw(fs.Parse(args))
-
-	if *configPath == "" {
-		ThrowFmt("ignite: --config is required")
-	}
 
 	if *guid == "" {
 		ThrowFmt("ignite: --guid is required")
@@ -47,7 +44,11 @@ func igniteMain(args []string) {
 		ThrowFmt("ignite: command is required after flags (use -- to separate)")
 	}
 
-	cfg := LoadConfig(*configPath)
+	endpoints := resolveEtcdEndpoints(*etcdFlag)
+
+	if len(endpoints) == 0 {
+		ThrowFmt("ignite: etcd endpoints required (pass --etcd-endpoints or set ETCDCTL_ENDPOINTS)")
+	}
 
 	task := Task{
 		GUID: *guid,
@@ -55,9 +56,21 @@ func igniteMain(args []string) {
 		Env:  parseEnvs(envs),
 	}
 
-	enqueueTask(cfg, task)
+	enqueueTask(EtcdConfig{Endpoints: endpoints}, task)
 
 	fmt.Println(task.GUID)
+}
+
+func resolveEtcdEndpoints(flagVal string) []string {
+	if flagVal != "" {
+		return splitTrimCSV(flagVal)
+	}
+
+	if v := os.Getenv("ETCDCTL_ENDPOINTS"); v != "" {
+		return splitTrimCSV(v)
+	}
+
+	return nil
 }
 
 func parseEnvs(envs []string) map[string]string {
@@ -80,8 +93,8 @@ func parseEnvs(envs []string) map[string]string {
 	return out
 }
 
-func enqueueTask(cfg *Config, task Task) {
-	cli := newEtcdClient(cfg.Etcd)
+func enqueueTask(etcd EtcdConfig, task Task) {
+	cli := newEtcdClient(etcd)
 	defer cli.Close()
 
 	payload := Throw2(json.Marshal(task))

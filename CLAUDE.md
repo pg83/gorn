@@ -19,7 +19,7 @@ One binary, three subcommands:
 
 - `gorn serve --config X` — HA daemon. Campaigns for leadership; when elected, runs a per-endpoint goroutine pool that dispatches tasks via SSH. On leadership loss: `os.Exit(0)` (let systemd restart).
 - `gorn wrap` — run on the worker via SSH. Reads all context (guid, cmd, env, user, s3 creds) from stdin JSON. Checks `HEAD gorn/<guid>/result.json` for idempotency, kills stale procs of the endpoint user, execs the command, uploads logs + result.json to S3, prints one final JSON line to stdout.
-- `gorn ignite --config X --guid G [--env K=V] -- cmd args...` — enqueue. Dedup via etcd txn on `CreateRevision == 0`.
+- `gorn ignite [--etcd-endpoints a,b,c] --guid G [--env K=V] -- cmd args...` — enqueue. Takes etcd endpoints directly (flag or `$ETCDCTL_ENDPOINTS`), no JSON config. Dedup via etcd txn on `CreateRevision == 0`.
 
 ## Important invariants
 

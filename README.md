@@ -39,12 +39,12 @@ Designed for a homelab: three nodes run the daemon, one is elected leader via et
 ## Subcommands
 
 ```
-gorn serve  --config path    # daemon, run on every HA node
-gorn wrap                    # invoked on workers via ssh, reads stdin JSON
-gorn ignite --config path --guid G [--env K=V ...] -- cmd args...
+gorn serve  --config path                                              # daemon, run on every HA node
+gorn wrap                                                              # invoked on workers via ssh, reads stdin JSON
+gorn ignite [--etcd-endpoints a,b,c] --guid G [--env K=V ...] -- cmd args...
 ```
 
-`serve` needs etcd, S3, and SSH keys. `ignite` only touches etcd. `wrap` only touches S3 and `/proc` and `exec`.
+`serve` needs etcd, S3, and SSH keys (so it takes the full JSON config). `ignite` only touches etcd, so it takes etcd endpoints directly via `--etcd-endpoints` or `$ETCDCTL_ENDPOINTS` and does not load the JSON config at all. `wrap` only touches S3, `/proc`, and `exec`.
 
 ## Configuration
 
