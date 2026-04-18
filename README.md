@@ -52,10 +52,39 @@ JSON. Example: [`config.example.json`](config.example.json). Path is passed via 
 
 Fields:
 
-- `endpoints[]`: list of `{host, user, path}`. Optional `ssh_key`: PEM body of the private key for this endpoint; overrides the global `ssh_key_path`. The body is held in an anonymous memfd — not written to the filesystem — and passed to `ssh` via an inherited fd. Combine with `${VAR}` expansion to inject from env.
-- `etcd.endpoints[]`: etcd cluster URLs.
+- `endpoints[]`: list of `{host, user, path}`. Each endpoint may also carry an `ssh_key`: the PEM body of the private key to use for this endpoint. When set, it overrides the global `ssh_key_path`. The body is loaded into an anonymous **memfd** (`memfd_create` with `MFD_CLOEXEC`), `fchmod`'d to `0600`, and passed to the `ssh` child process via `ExtraFiles`; the child sees it at `/proc/self/fd/3` and `ssh -i /proc/self/fd/3` reads it there. Key material never touches the filesystem.
+- `etcd.endpoints[]`: etcd cluster URLs. Accepts `host:port` or `scheme://host:port` — the etcd v3 client handles both.
 - `s3`: `{endpoint, region, bucket, access_key, secret_key, use_path_style}`. `endpoint` empty means AWS default. `use_path_style=true` for MinIO.
 - `ssh_key_path`: private key the daemon uses to connect to endpoints. Optional if every endpoint provides its own `ssh_key`.
+
+### `${VAR}` expansion
+
+Before the JSON is parsed, the raw text is passed through a substitution pass that replaces every occurrence of `${NAME}` with `os.Getenv("NAME")`. The pattern is `\$\{[A-Za-z_][A-Za-z0-9_]*\}` — no default-value syntax, no `$NAME` without braces. If a referenced variable is unset, `LoadConfig` throws (typos fail loudly rather than turning into empty strings). The substitution is a plain string replace: if the env value contains characters that need JSON escaping (quotes, backslashes, raw newlines), you must pre-escape them in the env value.
+
+Example:
+
+```json
+{
+  "s3": {
+    "endpoint": "${MINIO_URL}",
+    "access_key": "${MINIO_ACCESS_KEY}",
+    "secret_key": "${MINIO_SECRET_KEY}"
+  },
+  "endpoints": [
+    {"host": "n1.home.local", "user": "gorn-w1", "path": "/srv/gorn/w1", "ssh_key": "${GORN_W1_SSH_KEY}"}
+  ]
+}
+```
+
+### Env overlays
+
+After the JSON is parsed, three standard environment variables override the corresponding config fields when set (env wins over JSON):
+
+- `ETCDCTL_ENDPOINTS` — comma-separated, whitespace-trimmed, replaces `etcd.endpoints[]`. Lets you reuse the same env var `etcdctl` reads.
+- `AWS_ACCESS_KEY_ID` — overrides `s3.access_key`.
+- `AWS_SECRET_ACCESS_KEY` — overrides `s3.secret_key`.
+
+These are a convenience for deployments that already inject credentials via the AWS/etcdctl env conventions, so the JSON can stay credential-free. The `${VAR}` mechanism above is more general; use whichever fits.
 
 ## Build
 
