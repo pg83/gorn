@@ -34,6 +34,29 @@ type StateResp struct {
 	State string `json:"state"`
 }
 
+type EndpointInfo struct {
+	Host string `json:"host"`
+	Port int    `json:"port,omitempty"`
+	User string `json:"user"`
+	Path string `json:"path"`
+}
+
+type EndpointsResp struct {
+	Endpoints []EndpointInfo `json:"endpoints"`
+}
+
+type TaskListItem struct {
+	GUID           string            `json:"guid"`
+	Cmd            []string          `json:"cmd"`
+	Env            map[string]string `json:"env,omitempty"`
+	EnqueuedAt     string            `json:"enqueued_at,omitempty"`
+	CreateRevision int64             `json:"create_revision"`
+}
+
+type TaskListResp struct {
+	Tasks []TaskListItem `json:"tasks"`
+}
+
 type OutputResp struct {
 	Result    json.RawMessage `json:"result"`
 	StdoutB64 string          `json:"stdout_b64"`
@@ -68,11 +91,18 @@ func controlMain(args []string) {
 
 	s3cli := newS3Client(cfg.S3)
 
-	srv := &controlServer{etcd: cli, s3: s3cli, bucket: cfg.S3.Bucket}
+	endpoints := make([]EndpointInfo, len(cfg.Endpoints))
+
+	for i, ep := range cfg.Endpoints {
+		endpoints[i] = EndpointInfo{Host: ep.Host, Port: ep.Port, User: ep.User, Path: ep.Path}
+	}
+
+	srv := &controlServer{etcd: cli, s3: s3cli, bucket: cfg.S3.Bucket, endpoints: endpoints}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/tasks", srv.handleTasks)
 	mux.HandleFunc("/v1/tasks/", srv.handleTaskByID)
+	mux.HandleFunc("/v1/endpoints", srv.handleEndpoints)
 
 	server := &http.Server{
 		Addr:    cfg.Control.Listen,
@@ -102,25 +132,60 @@ func controlMain(args []string) {
 }
 
 type controlServer struct {
-	etcd   *clientv3.Client
-	s3     *s3.Client
-	bucket string
+	etcd      *clientv3.Client
+	s3        *s3.Client
+	bucket    string
+	endpoints []EndpointInfo
 }
 
 func (s *controlServer) handleTasks(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
+	switch r.Method {
+	case http.MethodPost:
+		exc := Try(func() {
+			s.enqueue(w, r)
+		})
+
+		exc.Catch(func(e *Exception) {
+			httpError(w, http.StatusInternalServerError, e.Error())
+		})
+	case http.MethodGet:
+		exc := Try(func() {
+			s.listTasks(w, r)
+		})
+
+		exc.Catch(func(e *Exception) {
+			httpError(w, http.StatusInternalServerError, e.Error())
+		})
+	default:
+		httpError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
+}
+
+func (s *controlServer) handleEndpoints(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
 		httpError(w, http.StatusMethodNotAllowed, "method not allowed")
 
 		return
 	}
 
-	exc := Try(func() {
-		s.enqueue(w, r)
-	})
+	httpJSON(w, http.StatusOK, EndpointsResp{Endpoints: s.endpoints})
+}
 
-	exc.Catch(func(e *Exception) {
-		httpError(w, http.StatusInternalServerError, e.Error())
-	})
+func (s *controlServer) listTasks(w http.ResponseWriter, r *http.Request) {
+	items := queueList(r.Context(), s.etcd)
+	out := make([]TaskListItem, len(items))
+
+	for i, it := range items {
+		out[i] = TaskListItem{
+			GUID:           it.Task.GUID,
+			Cmd:            it.Task.Cmd,
+			Env:            it.Task.Env,
+			EnqueuedAt:     it.Task.EnqueuedAt,
+			CreateRevision: it.CreateRevision,
+		}
+	}
+
+	httpJSON(w, http.StatusOK, TaskListResp{Tasks: out})
 }
 
 func (s *controlServer) enqueue(w http.ResponseWriter, r *http.Request) {
@@ -141,7 +206,12 @@ func (s *controlServer) enqueue(w http.ResponseWriter, r *http.Request) {
 		guid = newGUID()
 	}
 
-	task := Task{GUID: guid, Cmd: req.Cmd, Env: req.Env}
+	task := Task{
+		GUID:       guid,
+		Cmd:        req.Cmd,
+		Env:        req.Env,
+		EnqueuedAt: time.Now().UTC().Format(time.RFC3339Nano),
+	}
 	payload := Throw2(json.Marshal(task))
 	key := queueKey(guid)
 

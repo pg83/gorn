@@ -25,5 +25,9 @@
   "ssh_key_path": "/etc/gorn/ssh_key",
   "control": {
     "listen": "127.0.0.1:7878"
+  },
+  "web": {
+    "api": "http://127.0.0.1:7878",
+    "listen": "127.0.0.1:7979"
   }
 }

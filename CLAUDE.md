@@ -15,10 +15,11 @@ See [`README.md`](README.md) for the full picture and [`STYLE.md`](STYLE.md) for
 
 ## Subcommands
 
-One binary, four subcommands:
+One binary, five subcommands:
 
 - `gorn serve --config X` — HA daemon. Campaigns for leadership; when elected, runs a per-endpoint goroutine pool that dispatches tasks via SSH. On leadership loss: `os.Exit(0)` (let systemd restart).
-- `gorn control --config X` — HTTP JSON RPC over etcd + S3. Listens on `control.listen`. Three endpoints: `POST /v1/tasks` (enqueue, auto-GUID if absent), `GET /v1/tasks/<guid>` (state: `queued|done|not_found`), `GET /v1/tasks/<guid>/output` (parsed `result.json` + base64 stdout/stderr). No leader election; enqueue is an etcd `CreateRevision==0` txn, any instance can serve.
+- `gorn control --config X` — HTTP JSON RPC over etcd + S3. Listens on `control.listen`. Endpoints: `POST /v1/tasks` (enqueue, auto-GUID, stamps `enqueued_at`), `GET /v1/tasks` (queue list), `GET /v1/tasks/<guid>` (state: `queued|done|not_found`), `GET /v1/tasks/<guid>/output` (parsed `result.json` + base64 stdout/stderr), `GET /v1/endpoints` (endpoint list from config). No leader election; enqueue is an etcd `CreateRevision==0` txn, any instance can serve.
+- `gorn web --config X` — Bootstrap-CSS dashboard. Reads only `web.api` and `web.listen` from the config; talks to `control` via HTTP. Renders two tables (endpoints, queue with per-task age), auto-refreshes every 2s. Read-only, never goes to etcd/S3 directly.
 - `gorn wrap` — run on the worker via SSH. Reads all context (guid, cmd, env, user, s3 creds) from stdin JSON. Checks `HEAD gorn/<guid>/result.json` for idempotency, kills stale procs of the endpoint user, execs the command, uploads logs + result.json to S3, prints one final JSON line to stdout.
 - `gorn ignite --api URL [--guid G] [--env K=V] [--wait] -- cmd args...` — thin HTTP client for `control`. No etcd or S3 knowledge. `--wait` polls state, fetches output on `done`, writes stdout/stderr to its own fds, exits with the task's `exit_code`. `--api` also falls back to `$GORN_API`.
 

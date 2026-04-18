@@ -49,6 +49,11 @@ type ControlConfig struct {
 	Listen string `json:"listen"`
 }
 
+type WebConfig struct {
+	API    string `json:"api"`
+	Listen string `json:"listen"`
+}
+
 type S3Config struct {
 	Endpoint     string `json:"endpoint"`
 	Region       string `json:"region"`
@@ -63,6 +68,7 @@ type Config struct {
 	Etcd           EtcdConfig    `json:"etcd"`
 	S3             S3Config      `json:"s3"`
 	Control        ControlConfig `json:"control,omitempty"`
+	Web            WebConfig     `json:"web,omitempty"`
 	SSHKeyPath     string        `json:"ssh_key_path"`
 	RemoteWrapPath string        `json:"remote_wrap_path,omitempty"`
 }

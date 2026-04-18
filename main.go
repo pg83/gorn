@@ -19,6 +19,8 @@ func main() {
 			serveMain(args)
 		case "control":
 			controlMain(args)
+		case "web":
+			webMain(args)
 		case "wrap":
 			wrapMain(args)
 		case "ignite":
