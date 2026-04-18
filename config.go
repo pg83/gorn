@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"os"
+	"strings"
 )
 
 type Endpoint struct {
@@ -38,6 +39,24 @@ func LoadConfig(path string) *Config {
 
 	var cfg Config
 	Throw(json.Unmarshal(data, &cfg))
+
+	if v := os.Getenv("ETCDCTL_ENDPOINTS"); v != "" {
+		parts := strings.Split(v, ",")
+
+		for i, p := range parts {
+			parts[i] = strings.TrimSpace(p)
+		}
+
+		cfg.Etcd.Endpoints = parts
+	}
+
+	if v := os.Getenv("AWS_ACCESS_KEY_ID"); v != "" {
+		cfg.S3.AccessKey = v
+	}
+
+	if v := os.Getenv("AWS_SECRET_ACCESS_KEY"); v != "" {
+		cfg.S3.SecretKey = v
+	}
 
 	return &cfg
 }
