@@ -6,7 +6,7 @@ if [ $# -eq 0 ]; then
     exit 2
 fi
 
-BIN="$(cd "$(dirname "$0")" && pwd)/gorn"
+BIN="${PWD}/gorn"
 
 if [ ! -x "$BIN" ]; then
     echo "no executable gorn at $BIN" >&2
