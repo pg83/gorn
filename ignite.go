@@ -2,12 +2,13 @@ package main
 
 import (
 	"bytes"
-	"crypto/rand"
+	crand "crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"net/http"
 	"net/url"
 	"os"
@@ -28,6 +29,38 @@ func (s *stringsFlag) Set(v string) error {
 }
 
 var igniteHTTP = &http.Client{Timeout: 30 * time.Second}
+
+// retry runs fn with exp backoff + jitter. fn returns (done, err):
+//   - done=true   → success, stop
+//   - done=false  → transient, retry
+// err with done=true is a hard error and is returned to the caller.
+func retry(label string, fn func() (done bool, err error)) error {
+	const maxDelay = 60 * time.Second
+	delay := time.Second
+
+	for {
+		done, err := fn()
+
+		if done {
+			return err
+		}
+
+		sleep := delay/2 + time.Duration(rand.Int64N(int64(delay)))
+		fmt.Fprintf(os.Stderr, "ignite: %s: transient error (%v), retrying in %v\n", label, err, sleep)
+		time.Sleep(sleep)
+
+		delay *= 2
+
+		if delay > maxDelay {
+			delay = maxDelay
+		}
+	}
+}
+
+// isTransientStatus treats 5xx and 429 as transient.
+func isTransientStatus(code int) bool {
+	return code == http.StatusTooManyRequests || code >= 500
+}
 
 func igniteMain(args []string) {
 	fs := flag.NewFlagSet("ignite", flag.ExitOnError)
@@ -102,7 +135,7 @@ func resolveAPI(flagVal string) string {
 
 func newGUID() string {
 	b := make([]byte, 16)
-	Throw2(rand.Read(b))
+	Throw2(crand.Read(b))
 
 	b[6] = (b[6] & 0x0f) | 0x40
 	b[8] = (b[8] & 0x3f) | 0x80
@@ -134,38 +167,83 @@ func apiEnqueue(api string, req EnqueueReq) (EnqueueResp, bool) {
 	body := Throw2(json.Marshal(req))
 	target := strings.TrimRight(api, "/") + "/v1/tasks"
 
-	resp := Throw2(igniteHTTP.Post(target, "application/json", bytes.NewReader(body)))
-	defer resp.Body.Close()
-
-	data := Throw2(io.ReadAll(resp.Body))
-
-	if resp.StatusCode == http.StatusConflict {
-		return EnqueueResp{GUID: req.GUID}, true
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		ThrowFmt("ignite: enqueue failed: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
-	}
-
 	var out EnqueueResp
-	Throw(json.Unmarshal(data, &out))
+	var existed bool
 
-	return out, false
+	Throw(retry("enqueue", func() (bool, error) {
+		resp, err := igniteHTTP.Post(target, "application/json", bytes.NewReader(body))
+
+		if err != nil {
+			return false, err
+		}
+
+		defer resp.Body.Close()
+
+		data, err := io.ReadAll(resp.Body)
+
+		if err != nil {
+			return false, err
+		}
+
+		if resp.StatusCode == http.StatusConflict {
+			out = EnqueueResp{GUID: req.GUID}
+			existed = true
+
+			return true, nil
+		}
+
+		if isTransientStatus(resp.StatusCode) {
+			return false, fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			return true, fmt.Errorf("enqueue failed: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
+		}
+
+		if err := json.Unmarshal(data, &out); err != nil {
+			return true, err
+		}
+
+		return true, nil
+	}))
+
+	return out, existed
 }
 
 func apiGetState(api, guid string) string {
 	target := strings.TrimRight(api, "/") + "/v1/tasks/" + url.PathEscape(guid)
-	resp := Throw2(igniteHTTP.Get(target))
-	defer resp.Body.Close()
-
-	data := Throw2(io.ReadAll(resp.Body))
-
-	if resp.StatusCode != http.StatusOK {
-		ThrowFmt("ignite: state query failed: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
-	}
 
 	var sr StateResp
-	Throw(json.Unmarshal(data, &sr))
+
+	Throw(retry("state", func() (bool, error) {
+		resp, err := igniteHTTP.Get(target)
+
+		if err != nil {
+			return false, err
+		}
+
+		defer resp.Body.Close()
+
+		data, err := io.ReadAll(resp.Body)
+
+		if err != nil {
+			return false, err
+		}
+
+		if isTransientStatus(resp.StatusCode) {
+			return false, fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			return true, fmt.Errorf("state query failed: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
+		}
+
+		if err := json.Unmarshal(data, &sr); err != nil {
+			return true, err
+		}
+
+		return true, nil
+	}))
 
 	return sr.State
 }
@@ -188,17 +266,38 @@ func waitForDone(api, guid string) {
 
 func fetchAndPrintOutput(api, guid string) int {
 	target := strings.TrimRight(api, "/") + "/v1/tasks/" + url.PathEscape(guid) + "/output"
-	resp := Throw2(igniteHTTP.Get(target))
-	defer resp.Body.Close()
-
-	data := Throw2(io.ReadAll(resp.Body))
-
-	if resp.StatusCode != http.StatusOK {
-		ThrowFmt("ignite: output query failed: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
-	}
 
 	var out OutputResp
-	Throw(json.Unmarshal(data, &out))
+
+	Throw(retry("output", func() (bool, error) {
+		resp, err := igniteHTTP.Get(target)
+
+		if err != nil {
+			return false, err
+		}
+
+		defer resp.Body.Close()
+
+		data, err := io.ReadAll(resp.Body)
+
+		if err != nil {
+			return false, err
+		}
+
+		if isTransientStatus(resp.StatusCode) {
+			return false, fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			return true, fmt.Errorf("output query failed: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
+		}
+
+		if err := json.Unmarshal(data, &out); err != nil {
+			return true, err
+		}
+
+		return true, nil
+	}))
 
 	stdout := Throw2(base64.StdEncoding.DecodeString(out.StdoutB64))
 	stderr := Throw2(base64.StdEncoding.DecodeString(out.StderrB64))
