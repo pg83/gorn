@@ -5,5 +5,6 @@ type Task struct {
 	Cmd        []string          `json:"cmd"`
 	Env        map[string]string `json:"env,omitempty"`
 	Descr      string            `json:"descr,omitempty"`
+	Root       string            `json:"root,omitempty"`
 	EnqueuedAt string            `json:"enqueued_at,omitempty"`
 }

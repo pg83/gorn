@@ -69,6 +69,7 @@ func igniteMain(args []string) {
 	apiFlag := fs.String("api", "", "gorn control API URL; falls back to $GORN_API")
 	wait := fs.Bool("wait", false, "wait for task completion, print stdout/stderr, exit with task exit code")
 	descr := fs.String("descr", "", "human-readable task description (shown in web UI); defaults to the joined cmd")
+	root := fs.String("root", "", "S3 key prefix for this task's artifacts (gorn/<root>/<guid>/...); default 'gorn'")
 	stdinCmd := fs.Bool("stdin-cmd", false, "read the remote command body from stdin; resulting Cmd is [sh,-c,<stdin>]. Avoids ARG_MAX on large scripts.")
 
 	var envs stringsFlag
@@ -105,7 +106,7 @@ func igniteMain(args []string) {
 		taskGUID = newGUID()
 	}
 
-	req := EnqueueReq{GUID: taskGUID, Cmd: cmdArgs, Env: parseEnvs(envs), Descr: *descr}
+	req := EnqueueReq{GUID: taskGUID, Cmd: cmdArgs, Env: parseEnvs(envs), Descr: *descr, Root: *root}
 	got, existed := apiEnqueue(api, req)
 
 	if !*wait {
@@ -118,9 +119,9 @@ func igniteMain(args []string) {
 		fmt.Fprintf(os.Stderr, "ignite: task %q already exists in queue; waiting for it\n", got.GUID)
 	}
 
-	waitForDone(api, got.GUID)
+	waitForDone(api, got.GUID, *root)
 
-	exitCode := fetchAndPrintOutput(api, got.GUID)
+	exitCode := fetchAndPrintOutput(api, got.GUID, *root)
 
 	os.Exit(exitCode)
 }
@@ -210,8 +211,12 @@ func apiEnqueue(api string, req EnqueueReq) (EnqueueResp, bool) {
 	return out, existed
 }
 
-func apiGetState(api, guid string) string {
+func apiGetState(api, guid, root string) string {
 	target := strings.TrimRight(api, "/") + "/v1/tasks/" + url.PathEscape(guid)
+
+	if root != "" {
+		target += "?root=" + url.QueryEscape(root)
+	}
 
 	var sr StateResp
 
@@ -248,9 +253,9 @@ func apiGetState(api, guid string) string {
 	return sr.State
 }
 
-func waitForDone(api, guid string) {
+func waitForDone(api, guid, root string) {
 	for {
-		state := apiGetState(api, guid)
+		state := apiGetState(api, guid, root)
 
 		if state == "done" {
 			return
@@ -264,8 +269,12 @@ func waitForDone(api, guid string) {
 	}
 }
 
-func fetchAndPrintOutput(api, guid string) int {
+func fetchAndPrintOutput(api, guid, root string) int {
 	target := strings.TrimRight(api, "/") + "/v1/tasks/" + url.PathEscape(guid) + "/output"
+
+	if root != "" {
+		target += "?root=" + url.QueryEscape(root)
+	}
 
 	var out OutputResp
 

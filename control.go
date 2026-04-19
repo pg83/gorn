@@ -24,6 +24,7 @@ type EnqueueReq struct {
 	Cmd   []string          `json:"cmd"`
 	Env   map[string]string `json:"env,omitempty"`
 	Descr string            `json:"descr,omitempty"`
+	Root  string            `json:"root,omitempty"`
 }
 
 type EnqueueResp struct {
@@ -220,6 +221,7 @@ func (s *controlServer) enqueue(w http.ResponseWriter, r *http.Request) {
 		Cmd:        req.Cmd,
 		Env:        req.Env,
 		Descr:      descr,
+		Root:       req.Root,
 		EnqueuedAt: time.Now().UTC().Format(time.RFC3339Nano),
 	}
 	payload := Throw2(json.Marshal(task))
@@ -277,14 +279,35 @@ func (s *controlServer) handleTaskByID(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// resolveRoot picks the S3 root prefix: explicit ?root= query param
+// wins; otherwise the queued task's Root (from etcd); otherwise "gorn".
+func (s *controlServer) resolveRoot(r *http.Request, guid string) string {
+	if v := r.URL.Query().Get("root"); v != "" {
+		return v
+	}
+
+	resp, err := s.etcd.Get(r.Context(), queueKey(guid))
+
+	if err == nil && resp.Count > 0 {
+		var t Task
+
+		if json.Unmarshal(resp.Kvs[0].Value, &t) == nil && t.Root != "" {
+			return t.Root
+		}
+	}
+
+	return ""
+}
+
 func (s *controlServer) getState(w http.ResponseWriter, r *http.Request, guid string) {
 	state := "not_found"
+	root := s.resolveRoot(r, guid)
 
 	resp := Throw2(s.etcd.Get(r.Context(), queueKey(guid)))
 
 	if resp.Count > 0 {
 		state = "queued"
-	} else if s3ObjectExists(r.Context(), s.s3, s.bucket, resultKey(guid)) {
+	} else if s3ObjectExists(r.Context(), s.s3, s.bucket, resultKey(root, guid)) {
 		state = "done"
 	}
 
@@ -292,7 +315,8 @@ func (s *controlServer) getState(w http.ResponseWriter, r *http.Request, guid st
 }
 
 func (s *controlServer) getOutput(w http.ResponseWriter, r *http.Request, guid string) {
-	result := s3GetBytes(r.Context(), s.s3, s.bucket, resultKey(guid))
+	root := s.resolveRoot(r, guid)
+	result := s3GetBytes(r.Context(), s.s3, s.bucket, resultKey(root, guid))
 
 	if result == nil {
 		httpError(w, http.StatusNotFound, "result.json not found for "+guid)
@@ -300,8 +324,8 @@ func (s *controlServer) getOutput(w http.ResponseWriter, r *http.Request, guid s
 		return
 	}
 
-	stdout := s3GetBytes(r.Context(), s.s3, s.bucket, streamKey(guid, "stdout"))
-	stderr := s3GetBytes(r.Context(), s.s3, s.bucket, streamKey(guid, "stderr"))
+	stdout := s3GetBytes(r.Context(), s.s3, s.bucket, streamKey(root, guid, "stdout"))
+	stderr := s3GetBytes(r.Context(), s.s3, s.bucket, streamKey(root, guid, "stderr"))
 
 	httpJSON(w, http.StatusOK, OutputResp{
 		Result:    result,

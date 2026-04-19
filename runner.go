@@ -55,6 +55,7 @@ func doRunTask(ctx context.Context, ep Endpoint, task Task, s3cfg S3Config, keyF
 		Cmd:     task.Cmd,
 		Env:     task.Env,
 		User:    ep.User,
+		Root:    task.Root,
 		S3:      s3cfg,
 		LogPath: ep.LogPath,
 	}

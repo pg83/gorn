@@ -24,6 +24,7 @@ type WrapInput struct {
 	Cmd     []string          `json:"cmd"`
 	Env     map[string]string `json:"env,omitempty"`
 	User    string            `json:"user"`
+	Root    string            `json:"root,omitempty"`
 	S3      S3Config          `json:"s3"`
 	LogPath string            `json:"log_path,omitempty"`
 }
@@ -84,7 +85,7 @@ func wrapBody(input *WrapInput, log *wrapLog) {
 	log.logf("s3 client ready took=%.3fs", time.Since(t).Seconds())
 
 	t = time.Now()
-	already := wrapAlreadyDone(ctx, cli, input.S3.Bucket, input.GUID)
+	already := wrapAlreadyDone(ctx, cli, input.S3.Bucket, input.Root, input.GUID)
 	log.logf("s3 head (idempotency) took=%.3fs already_done=%v", time.Since(t).Seconds(), already)
 
 	if already {
@@ -200,10 +201,10 @@ func newS3Client(cfg S3Config) *s3.Client {
 	})
 }
 
-func wrapAlreadyDone(ctx context.Context, cli *s3.Client, bucket, guid string) bool {
+func wrapAlreadyDone(ctx context.Context, cli *s3.Client, bucket, root, guid string) bool {
 	_, err := cli.HeadObject(ctx, &s3.HeadObjectInput{
 		Bucket: aws.String(bucket),
-		Key:    aws.String(resultKey(guid)),
+		Key:    aws.String(resultKey(root, guid)),
 	})
 
 	if err == nil {
@@ -285,8 +286,8 @@ func runCmd(in *WrapInput) cmdResult {
 func uploadResult(ctx context.Context, cli *s3.Client, in *WrapInput, r cmdResult, log *wrapLog) {
 	bucket := in.S3.Bucket
 
-	putBytes(ctx, cli, bucket, streamKey(in.GUID, "stdout"), r.Stdout, log)
-	putBytes(ctx, cli, bucket, streamKey(in.GUID, "stderr"), r.Stderr, log)
+	putBytes(ctx, cli, bucket, streamKey(in.Root, in.GUID, "stdout"), r.Stdout, log)
+	putBytes(ctx, cli, bucket, streamKey(in.Root, in.GUID, "stderr"), r.Stderr, log)
 
 	host := Throw2(os.Hostname())
 
@@ -302,7 +303,7 @@ func uploadResult(ctx context.Context, cli *s3.Client, in *WrapInput, r cmdResul
 
 	payload := Throw2(json.Marshal(result))
 
-	putBytes(ctx, cli, bucket, resultKey(in.GUID), payload, log)
+	putBytes(ctx, cli, bucket, resultKey(in.Root, in.GUID), payload, log)
 }
 
 func putBytes(ctx context.Context, cli *s3.Client, bucket, key string, data []byte, log *wrapLog) {
@@ -322,10 +323,18 @@ func emitFinish(msg FinishMsg) {
 	fmt.Println(string(data))
 }
 
-func resultKey(guid string) string {
-	return "gorn/" + guid + "/result.json"
+func rootOr(root string) string {
+	if root == "" {
+		return "gorn"
+	}
+
+	return root
 }
 
-func streamKey(guid, name string) string {
-	return "gorn/" + guid + "/" + name
+func resultKey(root, guid string) string {
+	return rootOr(root) + "/" + guid + "/result.json"
+}
+
+func streamKey(root, guid, name string) string {
+	return rootOr(root) + "/" + guid + "/" + name
 }
