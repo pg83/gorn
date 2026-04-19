@@ -36,16 +36,28 @@ func igniteMain(args []string) {
 	apiFlag := fs.String("api", "", "gorn control API URL; falls back to $GORN_API")
 	wait := fs.Bool("wait", false, "wait for task completion, print stdout/stderr, exit with task exit code")
 	descr := fs.String("descr", "", "human-readable task description (shown in web UI); defaults to the joined cmd")
+	stdinCmd := fs.Bool("stdin-cmd", false, "read the remote command body from stdin; resulting Cmd is [sh,-c,<stdin>]. Avoids ARG_MAX on large scripts.")
 
 	var envs stringsFlag
 	fs.Var(&envs, "env", "KEY=VALUE (repeatable)")
 
 	Throw(fs.Parse(args))
 
-	cmdArgs := fs.Args()
+	var cmdArgs []string
 
-	if len(cmdArgs) == 0 {
-		ThrowFmt("ignite: command is required after flags (use -- to separate)")
+	if *stdinCmd {
+		if fs.NArg() > 0 {
+			ThrowFmt("ignite: --stdin-cmd is mutually exclusive with positional cmd args")
+		}
+
+		body := Throw2(io.ReadAll(os.Stdin))
+		cmdArgs = []string{"sh", "-c", string(body)}
+	} else {
+		cmdArgs = fs.Args()
+
+		if len(cmdArgs) == 0 {
+			ThrowFmt("ignite: command is required after flags (use -- to separate)")
+		}
 	}
 
 	api := resolveAPI(*apiFlag)
