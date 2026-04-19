@@ -60,12 +60,16 @@ func igniteMain(args []string) {
 	}
 
 	req := EnqueueReq{GUID: taskGUID, Cmd: cmdArgs, Env: parseEnvs(envs)}
-	got := apiEnqueue(api, req)
+	got, existed := apiEnqueue(api, req)
 
 	if !*wait {
 		fmt.Println(got.GUID)
 
 		return
+	}
+
+	if existed {
+		fmt.Fprintf(os.Stderr, "ignite: task %q already exists in queue; waiting for it\n", got.GUID)
 	}
 
 	waitForDone(api, got.GUID)
@@ -113,7 +117,7 @@ func parseEnvs(envs []string) map[string]string {
 	return out
 }
 
-func apiEnqueue(api string, req EnqueueReq) EnqueueResp {
+func apiEnqueue(api string, req EnqueueReq) (EnqueueResp, bool) {
 	body := Throw2(json.Marshal(req))
 	target := strings.TrimRight(api, "/") + "/v1/tasks"
 
@@ -122,6 +126,10 @@ func apiEnqueue(api string, req EnqueueReq) EnqueueResp {
 
 	data := Throw2(io.ReadAll(resp.Body))
 
+	if resp.StatusCode == http.StatusConflict {
+		return EnqueueResp{GUID: req.GUID}, true
+	}
+
 	if resp.StatusCode != http.StatusOK {
 		ThrowFmt("ignite: enqueue failed: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
 	}
@@ -129,7 +137,7 @@ func apiEnqueue(api string, req EnqueueReq) EnqueueResp {
 	var out EnqueueResp
 	Throw(json.Unmarshal(data, &out))
 
-	return out
+	return out, false
 }
 
 func apiGetState(api, guid string) string {
