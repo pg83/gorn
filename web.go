@@ -73,7 +73,7 @@ type webServer struct {
 
 type taskRow struct {
 	GUID       string
-	CmdStr     string
+	Descr      string
 	EnqueuedAt string
 	Age        string
 }
@@ -122,11 +122,11 @@ var dashboardTmpl = template.Must(template.New("dashboard").Parse(`<!DOCTYPE htm
   <h3 class="mt-4">Queue <span class="badge bg-secondary">{{len .Tasks}}</span></h3>
   <table class="table table-sm table-striped table-bordered bg-white">
     <thead class="table-dark">
-      <tr><th>guid</th><th>cmd</th><th>enqueued</th><th>age</th></tr>
+      <tr><th>guid</th><th>descr</th><th>enqueued</th><th>age</th></tr>
     </thead>
     <tbody>
     {{range .Tasks}}
-      <tr><td><code>{{.GUID}}</code></td><td><code>{{.CmdStr}}</code></td><td><small>{{.EnqueuedAt}}</small></td><td>{{.Age}}</td></tr>
+      <tr><td><code>{{.GUID}}</code></td><td><code>{{.Descr}}</code></td><td><small>{{.EnqueuedAt}}</small></td><td>{{.Age}}</td></tr>
     {{else}}
       <tr><td colspan="4" class="text-muted">queue is empty</td></tr>
     {{end}}
@@ -157,9 +157,15 @@ func (s *webServer) handleIndex(w http.ResponseWriter, r *http.Request) {
 		data.Tasks = make([]taskRow, len(tasks.Tasks))
 
 		for i, t := range tasks.Tasks {
+			descr := t.Descr
+
+			if descr == "" {
+				descr = strings.Join(t.Cmd, " ")
+			}
+
 			data.Tasks[i] = taskRow{
 				GUID:       t.GUID,
-				CmdStr:     strings.Join(t.Cmd, " "),
+				Descr:      descr,
 				EnqueuedAt: t.EnqueuedAt,
 				Age:        taskAge(now, t.EnqueuedAt),
 			}

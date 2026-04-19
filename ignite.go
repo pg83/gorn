@@ -35,6 +35,7 @@ func igniteMain(args []string) {
 	guid := fs.String("guid", "", "task GUID; auto-generated UUIDv4 if empty")
 	apiFlag := fs.String("api", "", "gorn control API URL; falls back to $GORN_API")
 	wait := fs.Bool("wait", false, "wait for task completion, print stdout/stderr, exit with task exit code")
+	descr := fs.String("descr", "", "human-readable task description (shown in web UI); defaults to the joined cmd")
 
 	var envs stringsFlag
 	fs.Var(&envs, "env", "KEY=VALUE (repeatable)")
@@ -59,7 +60,7 @@ func igniteMain(args []string) {
 		taskGUID = newGUID()
 	}
 
-	req := EnqueueReq{GUID: taskGUID, Cmd: cmdArgs, Env: parseEnvs(envs)}
+	req := EnqueueReq{GUID: taskGUID, Cmd: cmdArgs, Env: parseEnvs(envs), Descr: *descr}
 	got, existed := apiEnqueue(api, req)
 
 	if !*wait {

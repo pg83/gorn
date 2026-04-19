@@ -20,9 +20,10 @@ import (
 )
 
 type EnqueueReq struct {
-	GUID string            `json:"guid,omitempty"`
-	Cmd  []string          `json:"cmd"`
-	Env  map[string]string `json:"env,omitempty"`
+	GUID  string            `json:"guid,omitempty"`
+	Cmd   []string          `json:"cmd"`
+	Env   map[string]string `json:"env,omitempty"`
+	Descr string            `json:"descr,omitempty"`
 }
 
 type EnqueueResp struct {
@@ -49,6 +50,7 @@ type TaskListItem struct {
 	GUID           string            `json:"guid"`
 	Cmd            []string          `json:"cmd"`
 	Env            map[string]string `json:"env,omitempty"`
+	Descr          string            `json:"descr,omitempty"`
 	EnqueuedAt     string            `json:"enqueued_at,omitempty"`
 	CreateRevision int64             `json:"create_revision"`
 }
@@ -180,6 +182,7 @@ func (s *controlServer) listTasks(w http.ResponseWriter, r *http.Request) {
 			GUID:           it.Task.GUID,
 			Cmd:            it.Task.Cmd,
 			Env:            it.Task.Env,
+			Descr:          it.Task.Descr,
 			EnqueuedAt:     it.Task.EnqueuedAt,
 			CreateRevision: it.CreateRevision,
 		}
@@ -206,10 +209,17 @@ func (s *controlServer) enqueue(w http.ResponseWriter, r *http.Request) {
 		guid = newGUID()
 	}
 
+	descr := req.Descr
+
+	if descr == "" {
+		descr = strings.Join(req.Cmd, " ")
+	}
+
 	task := Task{
 		GUID:       guid,
 		Cmd:        req.Cmd,
 		Env:        req.Env,
+		Descr:      descr,
 		EnqueuedAt: time.Now().UTC().Format(time.RFC3339Nano),
 	}
 	payload := Throw2(json.Marshal(task))
