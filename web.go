@@ -181,17 +181,68 @@ func (s *webServer) handleIndex(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *webServer) getJSON(ctx context.Context, path string, out any) {
-	req := Throw2(http.NewRequestWithContext(ctx, http.MethodGet, s.api+path, nil))
-	resp := Throw2(s.http.Do(req))
-	defer resp.Body.Close()
+	// Short, bounded retry for transient backend errors (etcd timeout
+	// surfaces as HTTP 500 from control). The browser refreshes every
+	// 2s, so don't stall long; a handful of attempts is enough.
+	const attempts = 4
+	delay := 100 * time.Millisecond
 
-	body := Throw2(io.ReadAll(resp.Body))
+	var lastErr error
 
-	if resp.StatusCode != http.StatusOK {
-		ThrowFmt("%s: HTTP %d: %s", path, resp.StatusCode, strings.TrimSpace(string(body)))
+	for i := 0; i < attempts; i++ {
+		done, err := s.tryGetJSON(ctx, path, out)
+
+		if done {
+			return
+		}
+
+		lastErr = err
+
+		if ctx.Err() != nil {
+			break
+		}
+
+		time.Sleep(delay)
+		delay *= 2
 	}
 
-	Throw(json.Unmarshal(body, out))
+	Throw(lastErr)
+}
+
+func (s *webServer) tryGetJSON(ctx context.Context, path string, out any) (bool, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.api+path, nil)
+
+	if err != nil {
+		return true, err
+	}
+
+	resp, err := s.http.Do(req)
+
+	if err != nil {
+		return false, err
+	}
+
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+
+	if err != nil {
+		return false, err
+	}
+
+	if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
+		return false, fmt.Errorf("%s: HTTP %d: %s", path, resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return true, fmt.Errorf("%s: HTTP %d: %s", path, resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	if err := json.Unmarshal(body, out); err != nil {
+		return true, err
+	}
+
+	return true, nil
 }
 
 func taskAge(now time.Time, enqueuedAt string) string {
