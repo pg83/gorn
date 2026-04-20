@@ -54,6 +54,10 @@ type WebConfig struct {
 	Listen string `json:"listen"`
 }
 
+type PromConfig struct {
+	Listen string `json:"listen"`
+}
+
 type S3Config struct {
 	Endpoint     string `json:"endpoint"`
 	Region       string `json:"region"`
@@ -75,6 +79,7 @@ type Config struct {
 	S3             S3Config              `json:"s3"`
 	Control        ControlConfig         `json:"control,omitempty"`
 	Web            WebConfig             `json:"web,omitempty"`
+	Prom           PromConfig            `json:"prom,omitempty"`
 	SSHKeyPath     string                `json:"ssh_key_path"`
 	RemoteWrapPath string                `json:"remote_wrap_path,omitempty"`
 }

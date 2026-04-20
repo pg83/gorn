@@ -8,7 +8,7 @@ import (
 func main() {
 	exc := Try(func() {
 		if len(os.Args) < 2 {
-			ThrowFmt("usage: gorn {serve|control|web|wrap|ignite|exec} [args...]")
+			ThrowFmt("usage: gorn {serve|control|web|wrap|ignite|exec|prom} [args...]")
 		}
 
 		sub := os.Args[1]
@@ -27,6 +27,8 @@ func main() {
 			igniteMain(args)
 		case "exec":
 			execMain(args)
+		case "prom":
+			promMain(args)
 		default:
 			ThrowFmt("unknown subcommand: %q", sub)
 		}
