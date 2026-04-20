@@ -45,3 +45,10 @@ Integration testing means actually running `serve` against a real etcd/S3/SSH en
 ## What's not done
 
 Host-key verification (currently `InsecureIgnoreHostKey`), log streaming (single PUT at the end), CLI subcommands `list` / `show` / `cancel` / `logs` / `leader`.
+
+## Misc
+
+- Queue key prefix is schema-versioned (`/gorn/queue_v2/`). Any incompatible change to the `Task` JSON shape bumps the suffix — old entries just sit; nothing reads them. Update the changelog comment at the `queuePrefix` const when bumping.
+- Task body is a script (`Task.Script`), not an argv. `wrap.go::runCmd` writes it to a `memfd_create` without `MFD_CLOEXEC`, then execs `/proc/self/fd/N` — kernel `binfmt_script` handles the shebang, so there is no ARG_MAX on the script body. `ignite` accepts the script on stdin; positional args after `--` are synthesized into a minimal `#!/bin/sh\nexec <quoted-args>` for compat.
+- Scheduling is slot-aware, host-level. Each endpoint = 1 slot; per-host capacity is `len(endpoints-on-host)` and metered by `golang.org/x/sync/semaphore.Weighted`. A single scheduler goroutine scans an in-memory `QueueIndex` (initial `Get` + `Watch` from returned revision, resync on compaction) and first-fits tasks onto hosts. `Task.Slots` comes from the client; `MOLOT_SLOTS` and `MOLOT_CPUS=round(slots * cpus_per_slot * cpu_overcommit)` are injected into `task.Env` before SSH.
+- Leader state (inflight, semaphores, endpoint free-list) is pure in-memory — nothing is persisted to etcd. Failover rebuilds from the live queue + idempotent `HEAD <root>/<guid>/result.json` on S3.
