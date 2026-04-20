@@ -26,6 +26,7 @@ type WrapInput struct {
 	Env     map[string]string `json:"env,omitempty"`
 	User    string            `json:"user"`
 	Root    string            `json:"root,omitempty"`
+	Cwd     string            `json:"cwd,omitempty"`
 	S3      S3Config          `json:"s3"`
 	LogPath string            `json:"log_path,omitempty"`
 }
@@ -56,11 +57,16 @@ type cmdResult struct {
 }
 
 func wrapMain(args []string) {
-	if len(args) != 0 {
-		ThrowFmt("wrap: takes no arguments, reads context from stdin")
+	if len(args) > 1 {
+		ThrowFmt("wrap: takes at most one positional (guid, cosmetic for ps)")
 	}
 
 	input := readWrapInput()
+
+	if input.Cwd != "" {
+		Throw(os.Chdir(input.Cwd))
+		Throw(os.Setenv("PATH", input.Cwd+":"+os.Getenv("PATH")))
+	}
 
 	log := openWrapLog(input.LogPath, input.GUID)
 	defer log.close()

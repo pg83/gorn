@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -56,15 +55,12 @@ func doRunTask(ctx context.Context, ep Endpoint, task Task, s3cfg S3Config, keyF
 		Env:     task.Env,
 		User:    ep.User,
 		Root:    task.Root,
+		Cwd:     ep.Path,
 		S3:      s3cfg,
 		LogPath: ep.LogPath,
 	}
 
 	inputJSON := Throw2(json.Marshal(input))
-
-	payload := fmt.Sprintf("cd %s && PATH=$PWD:$PATH gorn wrap", shellQuote(ep.Path))
-	encoded := base64.StdEncoding.EncodeToString([]byte(payload))
-	remoteCmd := `eval "$(echo ` + encoded + ` | base64 -d)"`
 
 	port := ep.Port
 
@@ -82,7 +78,7 @@ func doRunTask(ctx context.Context, ep Endpoint, task Task, s3cfg S3Config, keyF
 		"-o", "ConnectTimeout=15",
 		"-o", "ServerAliveInterval=30",
 		ep.User + "@" + ep.Host,
-		remoteCmd,
+		"gorn", "wrap", task.GUID,
 	}
 
 	cmd := exec.CommandContext(ctx, resolveSSH(), sshArgs...)
