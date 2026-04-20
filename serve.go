@@ -32,6 +32,12 @@ func serveMain(args []string) {
 		if ep.SSHKey == "" && cfg.SSHKeyPath == "" {
 			ThrowFmt("serve: endpoint %d (%s@%s) has no ssh_key and global ssh_key_path is unset", i, ep.User, ep.Host)
 		}
+
+		hc, ok := cfg.Hosts[ep.Host]
+
+		if !ok || hc.CpusPerSlot <= 0 {
+			ThrowFmt("serve: endpoint %d (%s@%s) references host %q which is missing or has cpus_per_slot<=0 in config.hosts", i, ep.User, ep.Host, ep.Host)
+		}
 	}
 
 	if cfg.SSHKeyPath != "" {
