@@ -52,7 +52,7 @@ func runTaskOnEndpoint(ctx context.Context, ep Endpoint, task Task, s3cfg S3Conf
 func doRunTask(ctx context.Context, ep Endpoint, task Task, s3cfg S3Config, keyFile *os.File) (RunOutcome, string) {
 	input := WrapInput{
 		GUID:    task.GUID,
-		Cmd:     task.Cmd,
+		Script:  task.Script,
 		Env:     task.Env,
 		User:    ep.User,
 		Root:    task.Root,
@@ -92,7 +92,7 @@ func doRunTask(ctx context.Context, ep Endpoint, task Task, s3cfg S3Config, keyF
 	cmd.Stdout = &stdoutBuf
 	cmd.Stderr = &stderrBuf
 
-	fmt.Fprintf(os.Stderr, "dispatch: task=%s ep=%s@%s:%d log_path=%q cmd=%v ssh_args=%v\n", task.GUID, ep.User, ep.Host, port, ep.LogPath, task.Cmd, sshArgs)
+	fmt.Fprintf(os.Stderr, "dispatch: task=%s ep=%s@%s:%d log_path=%q script_bytes=%d ssh_args=%v\n", task.GUID, ep.User, ep.Host, port, ep.LogPath, len(task.Script), sshArgs)
 
 	runErr := cmd.Run()
 

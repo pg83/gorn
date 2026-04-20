@@ -157,15 +157,9 @@ func (s *webServer) handleIndex(w http.ResponseWriter, r *http.Request) {
 		data.Tasks = make([]taskRow, len(tasks.Tasks))
 
 		for i, t := range tasks.Tasks {
-			descr := t.Descr
-
-			if descr == "" {
-				descr = strings.Join(t.Cmd, " ")
-			}
-
 			data.Tasks[i] = taskRow{
 				GUID:       t.GUID,
-				Descr:      descr,
+				Descr:      t.Descr,
 				EnqueuedAt: t.EnqueuedAt,
 				Age:        taskAge(now, t.EnqueuedAt),
 			}

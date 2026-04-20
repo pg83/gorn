@@ -17,11 +17,12 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
+	"golang.org/x/sys/unix"
 )
 
 type WrapInput struct {
 	GUID    string            `json:"guid"`
-	Cmd     []string          `json:"cmd"`
+	Script  string            `json:"script"`
 	Env     map[string]string `json:"env,omitempty"`
 	User    string            `json:"user"`
 	Root    string            `json:"root,omitempty"`
@@ -76,7 +77,7 @@ func wrapMain(args []string) {
 
 func wrapBody(input *WrapInput, log *wrapLog) {
 	host := Throw2(os.Hostname())
-	log.logf("wrap start: host=%s user=%s cmd=%v env_keys=%v s3=%s/%s", host, input.User, input.Cmd, sortedKeys(input.Env), input.S3.Endpoint, input.S3.Bucket)
+	log.logf("wrap start: host=%s user=%s script_bytes=%d env_keys=%v s3=%s/%s", host, input.User, len(input.Script), sortedKeys(input.Env), input.S3.Endpoint, input.S3.Bucket)
 
 	ctx := context.Background()
 
@@ -175,8 +176,8 @@ func readWrapInput() *WrapInput {
 	var in WrapInput
 	Throw(json.Unmarshal(data, &in))
 
-	if in.GUID == "" || len(in.Cmd) == 0 || in.User == "" {
-		ThrowFmt("wrap: guid, cmd, and user are required in stdin JSON")
+	if in.GUID == "" || in.Script == "" || in.User == "" {
+		ThrowFmt("wrap: guid, script, and user are required in stdin JSON")
 	}
 
 	if in.S3.Bucket == "" {
@@ -246,10 +247,29 @@ func isS3NotFound(err error) bool {
 	return false
 }
 
+// runCmd writes the task's script into an anonymous in-memory file
+// (memfd_create) and execs it via /proc/self/fd/N. This sidesteps
+// ARG_MAX (scripts can be hundreds of KB once a big graph's worth of
+// dep paths is baked in) because the body never rides on the argv.
+// The kernel's binfmt_script handler reads the shebang off the memfd
+// and spawns the interpreter, which then reads the script off the
+// same inherited fd via /proc/self/fd/N.
 func runCmd(in *WrapInput) cmdResult {
 	var stdoutBuf, stderrBuf bytes.Buffer
 
-	cmd := exec.Command(in.Cmd[0], in.Cmd[1:]...)
+	// Don't set MFD_CLOEXEC: the fd must survive fork+exec so the child
+	// (the script interpreter) can see the body via /proc/self/fd/N.
+	fd, err := unix.MemfdCreate("gorn-script", 0)
+	Throw(err)
+
+	defer unix.Close(fd)
+
+	_, err = unix.Write(fd, []byte(in.Script))
+	Throw(err)
+
+	path := fmt.Sprintf("/proc/self/fd/%d", fd)
+
+	cmd := exec.Command(path)
 	cmd.Stdout = &stdoutBuf
 	cmd.Stderr = &stderrBuf
 	cmd.Env = os.Environ()

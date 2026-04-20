@@ -68,31 +68,32 @@ func igniteMain(args []string) {
 	guid := fs.String("guid", "", "task GUID; auto-generated UUIDv4 if empty")
 	apiFlag := fs.String("api", "", "gorn control API URL; falls back to $GORN_API")
 	wait := fs.Bool("wait", false, "wait for task completion, print stdout/stderr, exit with task exit code")
-	descr := fs.String("descr", "", "human-readable task description (shown in web UI); defaults to the joined cmd")
+	descr := fs.String("descr", "", "human-readable task description (shown in web UI); defaults to first non-empty line of the script")
 	root := fs.String("root", "", "S3 key prefix for this task's artifacts (gorn/<root>/<guid>/...); default 'gorn'")
 	slots := fs.Int("slots", 0, "number of host slots this task requires; default 1, rejected if larger than any host's slot count")
-	stdinCmd := fs.Bool("stdin-cmd", false, "read the remote command body from stdin; resulting Cmd is [sh,-c,<stdin>]. Avoids ARG_MAX on large scripts.")
 
 	var envs stringsFlag
 	fs.Var(&envs, "env", "KEY=VALUE (repeatable)")
 
 	Throw(fs.Parse(args))
 
-	var cmdArgs []string
+	// Script body: positional args after '--' synthesize one (compat mode
+	// for old 'gorn ignite ... -- argv0 argv1 ...' callers); otherwise
+	// the script is read from stdin. Inside gorn everything is a script
+	// — the worker writes it to a memfd and execs it directly, so there
+	// is no ARG_MAX limit on the body.
+	var script string
 
-	if *stdinCmd {
-		if fs.NArg() > 0 {
-			ThrowFmt("ignite: --stdin-cmd is mutually exclusive with positional cmd args")
-		}
-
-		body := Throw2(io.ReadAll(os.Stdin))
-		cmdArgs = []string{"sh", "-c", string(body)}
+	if fs.NArg() > 0 {
+		script = synthesizeScript(fs.Args())
 	} else {
-		cmdArgs = fs.Args()
+		body := Throw2(io.ReadAll(os.Stdin))
 
-		if len(cmdArgs) == 0 {
-			ThrowFmt("ignite: command is required after flags (use -- to separate)")
+		if len(body) == 0 {
+			ThrowFmt("ignite: empty script on stdin (pass '-- argv...' or pipe a script)")
 		}
+
+		script = string(body)
 	}
 
 	api := resolveAPI(*apiFlag)
@@ -107,7 +108,7 @@ func igniteMain(args []string) {
 		taskGUID = newGUID()
 	}
 
-	req := EnqueueReq{GUID: taskGUID, Cmd: cmdArgs, Env: parseEnvs(envs), Descr: *descr, Root: *root, Slots: *slots}
+	req := EnqueueReq{GUID: taskGUID, Script: script, Env: parseEnvs(envs), Descr: *descr, Root: *root, Slots: *slots}
 	got, existed := apiEnqueue(api, req)
 
 	if !*wait {
@@ -125,6 +126,24 @@ func igniteMain(args []string) {
 	exitCode := fetchAndPrintOutput(api, got.GUID, *root)
 
 	os.Exit(exitCode)
+}
+
+// synthesizeScript turns a positional cmdline (`ignite ... -- foo bar baz`)
+// into a minimal shebang'd script so the server-side script model stays
+// the single execution path. Kept for callers that still think in argv.
+func synthesizeScript(argv []string) string {
+	var b strings.Builder
+
+	b.WriteString("#!/bin/sh\nexec")
+
+	for _, a := range argv {
+		b.WriteString(" ")
+		b.WriteString(shellQuote(a))
+	}
+
+	b.WriteString("\n")
+
+	return b.String()
 }
 
 func resolveAPI(flagVal string) string {

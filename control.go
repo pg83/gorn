@@ -20,12 +20,12 @@ import (
 )
 
 type EnqueueReq struct {
-	GUID  string            `json:"guid,omitempty"`
-	Cmd   []string          `json:"cmd"`
-	Env   map[string]string `json:"env,omitempty"`
-	Descr string            `json:"descr,omitempty"`
-	Root  string            `json:"root,omitempty"`
-	Slots int               `json:"slots,omitempty"`
+	GUID   string            `json:"guid,omitempty"`
+	Script string            `json:"script"`
+	Env    map[string]string `json:"env,omitempty"`
+	Descr  string            `json:"descr,omitempty"`
+	Root   string            `json:"root,omitempty"`
+	Slots  int               `json:"slots,omitempty"`
 }
 
 type EnqueueResp struct {
@@ -50,7 +50,6 @@ type EndpointsResp struct {
 
 type TaskListItem struct {
 	GUID           string            `json:"guid"`
-	Cmd            []string          `json:"cmd"`
 	Env            map[string]string `json:"env,omitempty"`
 	Descr          string            `json:"descr,omitempty"`
 	Slots          int               `json:"slots,omitempty"`
@@ -144,6 +143,20 @@ type controlServer struct {
 	maxHostSlots int
 }
 
+// firstLine returns the first non-empty line of s stripped. Used as a
+// human-readable fallback for Task.Descr when ignite didn't pass one.
+func firstLine(s string) string {
+	for _, line := range strings.Split(s, "\n") {
+		t := strings.TrimSpace(line)
+
+		if t != "" {
+			return t
+		}
+	}
+
+	return ""
+}
+
 func maxHostSlots(eps []Endpoint) int {
 	byHost := map[string]int{}
 
@@ -202,7 +215,6 @@ func (s *controlServer) listTasks(w http.ResponseWriter, r *http.Request) {
 	for i, it := range items {
 		out[i] = TaskListItem{
 			GUID:           it.Task.GUID,
-			Cmd:            it.Task.Cmd,
 			Env:            it.Task.Env,
 			Descr:          it.Task.Descr,
 			Slots:          it.Task.Slots,
@@ -220,8 +232,8 @@ func (s *controlServer) enqueue(w http.ResponseWriter, r *http.Request) {
 	var req EnqueueReq
 	Throw(json.Unmarshal(body, &req))
 
-	if len(req.Cmd) == 0 {
-		httpError(w, http.StatusBadRequest, "cmd is required")
+	if req.Script == "" {
+		httpError(w, http.StatusBadRequest, "script is required")
 
 		return
 	}
@@ -235,7 +247,7 @@ func (s *controlServer) enqueue(w http.ResponseWriter, r *http.Request) {
 	descr := req.Descr
 
 	if descr == "" {
-		descr = strings.Join(req.Cmd, " ")
+		descr = firstLine(req.Script)
 	}
 
 	slots := req.Slots
@@ -252,7 +264,7 @@ func (s *controlServer) enqueue(w http.ResponseWriter, r *http.Request) {
 
 	task := Task{
 		GUID:       guid,
-		Cmd:        req.Cmd,
+		Script:     req.Script,
 		Env:        req.Env,
 		Descr:      descr,
 		Root:       req.Root,

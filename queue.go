@@ -8,8 +8,15 @@ import (
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
+// Schema-versioned prefix: bump the suffix whenever the Task JSON layout
+// changes incompatibly (field renames, removals, semantic shifts). Old
+// entries under previous prefixes are left alone for etcd's compactor to
+// eventually reap — no online migration, no half-deserialized rows.
+//
+//   queue_v1 — Cmd []string (up to 2026-04-20)
+//   queue_v2 — Script string (current)
 const (
-	queuePrefix          = "/gorn/queue/"
+	queuePrefix          = "/gorn/queue_v2/"
 	leaderElectionPrefix = "/gorn/election/"
 )
 
