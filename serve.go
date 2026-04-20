@@ -65,10 +65,15 @@ func serveMain(args []string) {
 
 	fmt.Fprintln(os.Stderr, "became leader")
 
+	// When the etcd session dies (lease expired, explicit close on our
+	// exit, transport blip), cancel the parent ctx so the dispatcher
+	// winds down. Don't os.Exit(0) here — that used to race ahead of
+	// any panic in Run and swallow the stacktrace, making "lost
+	// leadership ??? exiting immediately" loops impossible to diagnose.
 	go func() {
 		<-leader.Done()
-		fmt.Fprintln(os.Stderr, "lost leadership — exiting immediately")
-		os.Exit(0)
+		fmt.Fprintln(os.Stderr, "session done — cancelling dispatcher")
+		cancel()
 	}()
 
 	disp := NewDispatcher(cli, leader, cfg, keyFiles)
