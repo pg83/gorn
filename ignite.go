@@ -69,7 +69,7 @@ func igniteMain(args []string) {
 	apiFlag := fs.String("api", "", "gorn control API URL; falls back to $GORN_API")
 	wait := fs.Bool("wait", false, "wait for task completion, print stdout/stderr, exit with task exit code")
 	descr := fs.String("descr", "", "human-readable task description (shown in web UI); defaults to first non-empty line of the script")
-	root := fs.String("root", "", "S3 key prefix for this task's artifacts (gorn/<root>/<guid>/...); default 'gorn'")
+	root := fs.String("root", "cli", "S3 key prefix for this task's artifacts (<root>/<guid>/...)")
 	slots := fs.Int("slots", 0, "number of host slots this task requires; default 1, rejected if larger than any host's slot count")
 
 	var envs stringsFlag
