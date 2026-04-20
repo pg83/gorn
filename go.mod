@@ -1,6 +1,6 @@
 module github.com/pg83/gorn
 
-go 1.22
+go 1.25.0
 
 require (
 	github.com/aws/aws-sdk-go-v2 v1.30.3
@@ -8,6 +8,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.58.2
 	github.com/aws/smithy-go v1.20.3
 	go.etcd.io/etcd/client/v3 v3.5.13
+	golang.org/x/sync v0.3.0
 	golang.org/x/sys v0.19.0
 )
 

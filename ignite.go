@@ -70,6 +70,7 @@ func igniteMain(args []string) {
 	wait := fs.Bool("wait", false, "wait for task completion, print stdout/stderr, exit with task exit code")
 	descr := fs.String("descr", "", "human-readable task description (shown in web UI); defaults to the joined cmd")
 	root := fs.String("root", "", "S3 key prefix for this task's artifacts (gorn/<root>/<guid>/...); default 'gorn'")
+	slots := fs.Int("slots", 0, "number of host slots this task requires; default 1, rejected if larger than any host's slot count")
 	stdinCmd := fs.Bool("stdin-cmd", false, "read the remote command body from stdin; resulting Cmd is [sh,-c,<stdin>]. Avoids ARG_MAX on large scripts.")
 
 	var envs stringsFlag
@@ -106,7 +107,7 @@ func igniteMain(args []string) {
 		taskGUID = newGUID()
 	}
 
-	req := EnqueueReq{GUID: taskGUID, Cmd: cmdArgs, Env: parseEnvs(envs), Descr: *descr, Root: *root}
+	req := EnqueueReq{GUID: taskGUID, Cmd: cmdArgs, Env: parseEnvs(envs), Descr: *descr, Root: *root, Slots: *slots}
 	got, existed := apiEnqueue(api, req)
 
 	if !*wait {

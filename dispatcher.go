@@ -4,10 +4,13 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sort"
+	"strconv"
 	"sync"
 	"time"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
+	"golang.org/x/sync/semaphore"
 )
 
 type Dispatcher struct {
@@ -15,6 +18,10 @@ type Dispatcher struct {
 	leader   *Leader
 	cfg      *Config
 	keyFiles []*os.File
+	index    *QueueIndex
+
+	hosts     map[string]*hostState
+	hostNames []string // sorted; deterministic iteration
 
 	mu       sync.Mutex
 	inflight map[string]struct{}
@@ -22,15 +29,86 @@ type Dispatcher struct {
 	wake chan struct{}
 }
 
+// hostState owns a host's capacity and endpoint pool. Sem meters concurrent
+// slot usage; freeEps hands out the actual gorn_N endpoint (user+ssh_key) a
+// dispatched task will SSH through. cpusPerSlot * task.Slots gives MOLOT_CPUS.
+type hostState struct {
+	capacity    int64
+	sem         *semaphore.Weighted
+	freeEps     chan *endpointRef
+	cpusPerSlot int
+}
+
+type endpointRef struct {
+	ep      Endpoint
+	keyFile *os.File
+}
+
 func NewDispatcher(cli *clientv3.Client, leader *Leader, cfg *Config, keyFiles []*os.File) *Dispatcher {
-	return &Dispatcher{
-		cli:      cli,
-		leader:   leader,
-		cfg:      cfg,
-		keyFiles: keyFiles,
-		inflight: make(map[string]struct{}),
-		wake:     make(chan struct{}, 1),
+	hosts := map[string]*hostState{}
+
+	for i, ep := range cfg.Endpoints {
+		h := hosts[ep.Host]
+
+		if h == nil {
+			hc, ok := cfg.Hosts[ep.Host]
+
+			if !ok || hc.CpusPerSlot <= 0 {
+				ThrowFmt("dispatcher: host %q missing cpus_per_slot in config.hosts (required for endpoints using it)", ep.Host)
+			}
+
+			h = &hostState{cpusPerSlot: hc.CpusPerSlot}
+			hosts[ep.Host] = h
+		}
+
+		h.capacity++
+		h.freeEps = extendEPs(h.freeEps, &endpointRef{ep: ep, keyFile: keyFiles[i]})
 	}
+
+	names := make([]string, 0, len(hosts))
+
+	for name, h := range hosts {
+		h.sem = semaphore.NewWeighted(h.capacity)
+		names = append(names, name)
+	}
+
+	sort.Strings(names)
+
+	return &Dispatcher{
+		cli:       cli,
+		leader:    leader,
+		cfg:       cfg,
+		keyFiles:  keyFiles,
+		index:     NewQueueIndex(cli),
+		hosts:     hosts,
+		hostNames: names,
+		inflight:  make(map[string]struct{}),
+		wake:      make(chan struct{}, 1),
+	}
+}
+
+// extendEPs appends ref to the buffered channel, growing the buffer by one.
+// Channels can't be resized; build a new channel one slot bigger and copy.
+func extendEPs(old chan *endpointRef, ref *endpointRef) chan *endpointRef {
+	size := 1
+
+	if old != nil {
+		size = cap(old) + 1
+	}
+
+	out := make(chan *endpointRef, size)
+
+	if old != nil {
+		close(old)
+
+		for r := range old {
+			out <- r
+		}
+	}
+
+	out <- ref
+
+	return out
 }
 
 func (d *Dispatcher) Run(ctx context.Context) {
@@ -45,34 +123,41 @@ func (d *Dispatcher) Run(ctx context.Context) {
 		defer wg.Done()
 
 		exc := Try(func() {
-			d.watchQueue(ctx)
+			d.index.Run(ctx)
 		})
 
 		exc.Catch(func(e *Exception) {
-			fmt.Fprintln(os.Stderr, "watchQueue failed:", e.Error())
+			fmt.Fprintln(os.Stderr, "queue index failed:", e.Error())
 		})
 	}()
 
-	for i, ep := range d.cfg.Endpoints {
-		wg.Add(1)
+	wg.Add(1)
 
-		go func(ep Endpoint, keyFile *os.File) {
-			defer wg.Done()
+	go func() {
+		defer wg.Done()
 
-			d.endpointLoop(ctx, ep, keyFile)
-		}(ep, d.keyFiles[i])
-	}
+		d.forwardWakes(ctx)
+	}()
+
+	wg.Add(1)
+
+	go func() {
+		defer wg.Done()
+
+		d.schedulerLoop(ctx)
+	}()
 
 	wg.Wait()
 }
 
-func (d *Dispatcher) watchQueue(ctx context.Context) {
-	d.signal()
-
-	ch := d.cli.Watch(ctx, queuePrefix, clientv3.WithPrefix())
-
-	for range ch {
-		d.signal()
+func (d *Dispatcher) forwardWakes(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-d.index.Wake():
+			d.signal()
+		}
 	}
 }
 
@@ -83,38 +168,123 @@ func (d *Dispatcher) signal() {
 	}
 }
 
-func (d *Dispatcher) endpointLoop(ctx context.Context, ep Endpoint, keyFile *os.File) {
+func (d *Dispatcher) schedulerLoop(ctx context.Context) {
 	for ctx.Err() == nil {
 		exc := Try(func() {
-			d.oneIteration(ctx, ep, keyFile)
+			d.pickAll(ctx)
 		})
 
 		exc.Catch(func(e *Exception) {
-			fmt.Fprintln(os.Stderr, ep.Host, ep.User, "iteration error:", e.Error())
+			fmt.Fprintln(os.Stderr, "scheduler iteration error:", e.Error())
 
 			time.Sleep(3 * time.Second)
 		})
-	}
-}
 
-func (d *Dispatcher) oneIteration(ctx context.Context, ep Endpoint, keyFile *os.File) {
-	task, ok := d.pickNextTask(ctx)
-
-	if !ok {
 		select {
 		case <-ctx.Done():
+			return
 		case <-d.wake:
 		case <-time.After(5 * time.Second):
 		}
+	}
+}
 
-		return
+// pickAll scans the queue in priority order, tries to dispatch every eligible
+// task to a host with capacity. Skips tasks whose slot count exceeds every
+// host's capacity (unschedulable — already rejected at enqueue, but defense
+// in depth). Tasks that fit but can't acquire right now wait for the next
+// wake (freed sem or new enqueue).
+func (d *Dispatcher) pickAll(ctx context.Context) {
+	for _, it := range d.index.Snapshot() {
+		task := it.Task
+		slots := task.Slots
+
+		if slots <= 0 {
+			slots = 1
+		}
+
+		d.mu.Lock()
+
+		if _, busy := d.inflight[task.GUID]; busy {
+			d.mu.Unlock()
+
+			continue
+		}
+
+		host, ref := d.tryAcquire(int64(slots))
+
+		if host == nil {
+			d.mu.Unlock()
+
+			continue
+		}
+
+		d.inflight[task.GUID] = struct{}{}
+		d.mu.Unlock()
+
+		go d.runTask(ctx, task, slots, ref, host)
+	}
+}
+
+// tryAcquire walks hosts in sorted order, first-fit: picks the first host
+// that has a) enough total capacity for the task, and b) sem.TryAcquire
+// succeeds right now. Returns the acquired endpoint ref, or (nil, nil).
+// Caller holds d.mu.
+func (d *Dispatcher) tryAcquire(slots int64) (*hostState, *endpointRef) {
+	for _, name := range d.hostNames {
+		h := d.hosts[name]
+
+		if slots > h.capacity {
+			continue
+		}
+
+		if !h.sem.TryAcquire(slots) {
+			continue
+		}
+
+		// We just acquired slots; a free endpoint must be available.
+		var ref *endpointRef
+
+		select {
+		case ref = <-h.freeEps:
+		default:
+			// Shouldn't happen — sem gates count of in-flight tasks per
+			// host to len(freeEps). Release and move on.
+			h.sem.Release(slots)
+
+			continue
+		}
+
+		return h, ref
 	}
 
-	defer d.releaseInflight(task.GUID)
+	return nil, nil
+}
 
-	outcome, detail := runTaskOnEndpoint(ctx, ep, task, d.cfg.S3, keyFile)
+func (d *Dispatcher) runTask(ctx context.Context, task Task, slots int, ref *endpointRef, host *hostState) {
+	defer func() {
+		host.sem.Release(int64(slots))
+		host.freeEps <- ref
 
-	fmt.Fprintf(os.Stderr, "task %s on %s@%s: %s (%s)\n", task.GUID, ep.User, ep.Host, outcome, detail)
+		d.mu.Lock()
+		delete(d.inflight, task.GUID)
+		d.mu.Unlock()
+
+		d.signal()
+	}()
+
+	if task.Env == nil {
+		task.Env = map[string]string{}
+	}
+
+	cpus := int(float64(slots*host.cpusPerSlot)*d.cfg.CpuOvercommit + 0.5)
+
+	task.Env["MOLOT_SLOTS"] = strconv.Itoa(slots)
+	task.Env["MOLOT_CPUS"] = strconv.Itoa(cpus)
+
+	outcome, detail := runTaskOnEndpoint(ctx, ref.ep, task, d.cfg.S3, ref.keyFile)
+
+	fmt.Fprintf(os.Stderr, "task %s on %s@%s (slots=%d cpus=%d): %s (%s)\n", task.GUID, ref.ep.User, ref.ep.Host, slots, cpus, outcome, detail)
 
 	switch outcome {
 	case OutcomeSuccess, OutcomeNonRetriable:
@@ -122,33 +292,6 @@ func (d *Dispatcher) oneIteration(ctx context.Context, ep Endpoint, keyFile *os.
 	case OutcomeRetriable:
 		time.Sleep(3 * time.Second)
 	}
-}
-
-func (d *Dispatcher) pickNextTask(ctx context.Context) (Task, bool) {
-	items := queueList(ctx, d.cli)
-
-	d.mu.Lock()
-	defer d.mu.Unlock()
-
-	for _, it := range items {
-		if _, busy := d.inflight[it.Task.GUID]; busy {
-			continue
-		}
-
-		d.inflight[it.Task.GUID] = struct{}{}
-
-		return it.Task, true
-	}
-
-	return Task{}, false
-}
-
-func (d *Dispatcher) releaseInflight(guid string) {
-	d.mu.Lock()
-	delete(d.inflight, guid)
-	d.mu.Unlock()
-
-	d.signal()
 }
 
 func (d *Dispatcher) finalize(ctx context.Context, guid string) {

@@ -63,14 +63,20 @@ type S3Config struct {
 	UsePathStyle bool   `json:"use_path_style"`
 }
 
+type HostConfig struct {
+	CpusPerSlot int `json:"cpus_per_slot"`
+}
+
 type Config struct {
-	Endpoints      []Endpoint    `json:"endpoints"`
-	Etcd           EtcdConfig    `json:"etcd"`
-	S3             S3Config      `json:"s3"`
-	Control        ControlConfig `json:"control,omitempty"`
-	Web            WebConfig     `json:"web,omitempty"`
-	SSHKeyPath     string        `json:"ssh_key_path"`
-	RemoteWrapPath string        `json:"remote_wrap_path,omitempty"`
+	Endpoints      []Endpoint            `json:"endpoints"`
+	Hosts          map[string]HostConfig `json:"hosts,omitempty"`
+	CpuOvercommit  float64               `json:"cpu_overcommit,omitempty"`
+	Etcd           EtcdConfig            `json:"etcd"`
+	S3             S3Config              `json:"s3"`
+	Control        ControlConfig         `json:"control,omitempty"`
+	Web            WebConfig             `json:"web,omitempty"`
+	SSHKeyPath     string                `json:"ssh_key_path"`
+	RemoteWrapPath string                `json:"remote_wrap_path,omitempty"`
 }
 
 func LoadConfig(path string) *Config {
@@ -79,6 +85,10 @@ func LoadConfig(path string) *Config {
 
 	var cfg Config
 	Throw(json.Unmarshal([]byte(expanded), &cfg))
+
+	if cfg.CpuOvercommit <= 0 {
+		cfg.CpuOvercommit = 1.25
+	}
 
 	if v := os.Getenv("ETCDCTL_ENDPOINTS"); v != "" {
 		cfg.Etcd.Endpoints = splitTrimCSV(v)

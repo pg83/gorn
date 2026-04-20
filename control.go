@@ -25,6 +25,7 @@ type EnqueueReq struct {
 	Env   map[string]string `json:"env,omitempty"`
 	Descr string            `json:"descr,omitempty"`
 	Root  string            `json:"root,omitempty"`
+	Slots int               `json:"slots,omitempty"`
 }
 
 type EnqueueResp struct {
@@ -52,6 +53,7 @@ type TaskListItem struct {
 	Cmd            []string          `json:"cmd"`
 	Env            map[string]string `json:"env,omitempty"`
 	Descr          string            `json:"descr,omitempty"`
+	Slots          int               `json:"slots,omitempty"`
 	EnqueuedAt     string            `json:"enqueued_at,omitempty"`
 	CreateRevision int64             `json:"create_revision"`
 }
@@ -100,7 +102,7 @@ func controlMain(args []string) {
 		endpoints[i] = EndpointInfo{Host: ep.Host, Port: ep.Port, User: ep.User, Path: ep.Path}
 	}
 
-	srv := &controlServer{etcd: cli, s3: s3cli, bucket: cfg.S3.Bucket, endpoints: endpoints}
+	srv := &controlServer{etcd: cli, s3: s3cli, bucket: cfg.S3.Bucket, endpoints: endpoints, maxHostSlots: maxHostSlots(cfg.Endpoints)}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/tasks", srv.handleTasks)
@@ -135,10 +137,29 @@ func controlMain(args []string) {
 }
 
 type controlServer struct {
-	etcd      *clientv3.Client
-	s3        *s3.Client
-	bucket    string
-	endpoints []EndpointInfo
+	etcd         *clientv3.Client
+	s3           *s3.Client
+	bucket       string
+	endpoints    []EndpointInfo
+	maxHostSlots int
+}
+
+func maxHostSlots(eps []Endpoint) int {
+	byHost := map[string]int{}
+
+	for _, ep := range eps {
+		byHost[ep.Host]++
+	}
+
+	max := 0
+
+	for _, n := range byHost {
+		if n > max {
+			max = n
+		}
+	}
+
+	return max
 }
 
 func (s *controlServer) handleTasks(w http.ResponseWriter, r *http.Request) {
@@ -184,6 +205,7 @@ func (s *controlServer) listTasks(w http.ResponseWriter, r *http.Request) {
 			Cmd:            it.Task.Cmd,
 			Env:            it.Task.Env,
 			Descr:          it.Task.Descr,
+			Slots:          it.Task.Slots,
 			EnqueuedAt:     it.Task.EnqueuedAt,
 			CreateRevision: it.CreateRevision,
 		}
@@ -216,12 +238,25 @@ func (s *controlServer) enqueue(w http.ResponseWriter, r *http.Request) {
 		descr = strings.Join(req.Cmd, " ")
 	}
 
+	slots := req.Slots
+
+	if slots <= 0 {
+		slots = 1
+	}
+
+	if slots > s.maxHostSlots {
+		httpError(w, http.StatusBadRequest, fmt.Sprintf("unschedulable: slots=%d > max host capacity=%d", slots, s.maxHostSlots))
+
+		return
+	}
+
 	task := Task{
 		GUID:       guid,
 		Cmd:        req.Cmd,
 		Env:        req.Env,
 		Descr:      descr,
 		Root:       req.Root,
+		Slots:      slots,
 		EnqueuedAt: time.Now().UTC().Format(time.RFC3339Nano),
 	}
 	payload := Throw2(json.Marshal(task))
