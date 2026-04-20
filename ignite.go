@@ -86,6 +86,10 @@ func igniteMain(args []string) {
 
 	if fs.NArg() > 0 {
 		script = synthesizeScript(fs.Args())
+
+		if *descr == "" {
+			*descr = strings.Join(fs.Args(), " ")
+		}
 	} else {
 		body := Throw2(io.ReadAll(os.Stdin))
 
@@ -130,20 +134,13 @@ func igniteMain(args []string) {
 
 // synthesizeScript turns a positional cmdline (`ignite ... -- foo bar baz`)
 // into a minimal shebang'd script so the server-side script model stays
-// the single execution path. Kept for callers that still think in argv.
+// the single execution path. The argv travels through `gorn exec` as
+// base64-encoded JSON — no shell quoting, no ARG_MAX, no surprises.
 func synthesizeScript(argv []string) string {
-	var b strings.Builder
+	data := Throw2(json.Marshal(argv))
+	encoded := base64.StdEncoding.EncodeToString(data)
 
-	b.WriteString("#!/bin/sh\nexec")
-
-	for _, a := range argv {
-		b.WriteString(" ")
-		b.WriteString(shellQuote(a))
-	}
-
-	b.WriteString("\n")
-
-	return b.String()
+	return "#!/bin/sh\nexec gorn exec " + encoded + "\n"
 }
 
 func resolveAPI(flagVal string) string {

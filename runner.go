@@ -156,10 +156,6 @@ func lastFinishMsg(stdout string) *FinishMsg {
 	return nil
 }
 
-func shellQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
-}
-
 func resolveSSH() string {
 	p, err := exec.LookPath("ssh")
 

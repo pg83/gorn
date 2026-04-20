@@ -101,20 +101,3 @@ func TestClassify_Retriable_UnknownOutcome(t *testing.T) {
 	}
 }
 
-func TestShellQuote(t *testing.T) {
-	cases := []struct {
-		in, want string
-	}{
-		{"/srv/gorn", "'/srv/gorn'"},
-		{"/path with space", "'/path with space'"},
-		{"it's", `'it'\''s'`},
-	}
-
-	for _, c := range cases {
-		got := shellQuote(c.in)
-
-		if got != c.want {
-			t.Errorf("shellQuote(%q) = %q, want %q", c.in, got, c.want)
-		}
-	}
-}
