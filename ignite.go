@@ -82,10 +82,27 @@ func igniteMain(args []string) {
 	// the script is read from stdin. Inside gorn everything is a script
 	// — the worker writes it to a memfd and execs it directly, so there
 	// is no ARG_MAX limit on the body.
+	//
+	// In '-- argv' mode, if the client's own stdin is a pipe/file (not a
+	// TTY), it's read and embedded into the script so the worker pipes
+	// those bytes into the inner cmd's stdin. This makes
+	// `cat foo.bin | gorn ignite -- cmd` work end-to-end: the bytes travel
+	// as base64 inside the script, survive ARG_MAX, and land on cmd's
+	// stdin on the worker.
 	var script string
 
 	if fs.NArg() > 0 {
-		script = synthesizeScript(fs.Args())
+		var stdin []byte
+
+		// Don't try to read from a TTY — it would block the client on
+		// keyboard input nobody's providing. A TTY means "no pipe",
+		// which is the same thing as an empty pipe for the inner cmd:
+		// immediate EOF on stdin.
+		if !stdinIsTTY() {
+			stdin = Throw2(io.ReadAll(os.Stdin))
+		}
+
+		script = synthesizeScript(fs.Args(), stdin)
 
 		if *descr == "" {
 			*descr = strings.Join(fs.Args(), " ")
@@ -134,13 +151,25 @@ func igniteMain(args []string) {
 
 // synthesizeScript turns a positional cmdline (`ignite ... -- foo bar baz`)
 // into a minimal shebang'd script so the server-side script model stays
-// the single execution path. The argv travels through `gorn exec` as
-// base64-encoded JSON — no shell quoting, no ARG_MAX, no surprises.
-func synthesizeScript(argv []string) string {
-	data := Throw2(json.Marshal(argv))
-	encoded := base64.StdEncoding.EncodeToString(data)
+// the single execution path. argv travels as base64-encoded JSON and
+// stdin as a base64 heredoc piped into the inner cmd — no shell quoting,
+// no ARG_MAX, no surprises. The heredoc marker uses underscores, which
+// aren't in the base64 alphabet, so it can't collide with the payload.
+func synthesizeScript(argv []string, stdin []byte) string {
+	argvB64 := base64.StdEncoding.EncodeToString(Throw2(json.Marshal(argv)))
+	stdinB64 := base64.StdEncoding.EncodeToString(stdin)
 
-	return "#!/bin/sh\nexec gorn exec " + encoded + "\n"
+	return "#!/bin/sh\nbase64 -d <<'__GORN_STDIN_B64__' | gorn exec " + argvB64 + "\n" + stdinB64 + "\n__GORN_STDIN_B64__\n"
+}
+
+func stdinIsTTY() bool {
+	st, err := os.Stdin.Stat()
+
+	if err != nil {
+		return false
+	}
+
+	return (st.Mode() & os.ModeCharDevice) != 0
 }
 
 func resolveAPI(flagVal string) string {
