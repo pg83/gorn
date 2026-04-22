@@ -26,7 +26,7 @@ done
 for x in 0 1 2 3 4; do
     f="/var/run/gorn_${x}/std/current"
     [ -f "$f" ] && : > "$f"
-    f="/var/run/gorn_${x}/std/log/agent.log"
+    f="/var/run/gorn_${x}/std/home/.gorn-wrap.log"
     [ -f "$f" ] && : > "$f"
 done
 true

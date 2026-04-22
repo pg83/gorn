@@ -16,7 +16,7 @@ PATHS=(
 
 for x in 0 1 2 3 4; do
     PATHS+=("/var/run/gorn_${x}/std/current")
-    PATHS+=("/var/run/gorn_${x}/std/log/agent.log")
+    PATHS+=("/var/run/gorn_${x}/std/home/.gorn-wrap.log")
 done
 
 SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=30 -o StrictHostKeyChecking=accept-new)
