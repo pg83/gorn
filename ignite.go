@@ -301,6 +301,15 @@ func apiGetState(api, guid, root string) string {
 }
 
 func waitForDone(api, guid, root string) {
+	// Start polling tight (500ms) so short-running tasks don't drag,
+	// then back off to a 10s ceiling — most waits sit behind long
+	// molot builds, and 2 polls/s × N waiting ignites was measurable
+	// load on control/etcd. tout*1.3 + sleep = tout/2 + rand(0, tout)
+	// gives a smooth ramp plus per-waiter jitter so many concurrent
+	// waiters don't hit control in lock-step.
+	tout := 500 * time.Millisecond
+	const toutCap = 10 * time.Second
+
 	for {
 		state := apiGetState(api, guid, root)
 
@@ -312,7 +321,14 @@ func waitForDone(api, guid, root string) {
 			ThrowFmt("ignite: task %q vanished (neither queued nor done)", guid)
 		}
 
-		time.Sleep(500 * time.Millisecond)
+		sleep := tout/2 + time.Duration(rand.Int64N(int64(tout)))
+		time.Sleep(sleep)
+
+		tout = time.Duration(float64(tout) * 1.3)
+
+		if tout > toutCap {
+			tout = toutCap
+		}
 	}
 }
 
