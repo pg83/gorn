@@ -8,7 +8,7 @@ import (
 func main() {
 	exc := Try(func() {
 		if len(os.Args) < 2 {
-			ThrowFmt("usage: gorn {serve|control|web|wrap|ignite|exec|prom} [args...]")
+			ThrowFmt("usage: gorn {serve|control|web|wrap|wrap_lower|ignite|exec|prom} [args...]")
 		}
 
 		sub := os.Args[1]
@@ -23,6 +23,8 @@ func main() {
 			webMain(args)
 		case "wrap":
 			wrapMain(args)
+		case "wrap_lower":
+			wrapLowerMain(args)
 		case "ignite":
 			igniteMain(args)
 		case "exec":

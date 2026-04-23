@@ -63,10 +63,12 @@ func wrapMain(args []string) {
 
 	input := readWrapInput()
 
-	if input.Cwd != "" {
-		Throw(os.Chdir(input.Cwd))
-		Throw(os.Setenv("PATH", input.Cwd+":"+os.Getenv("PATH")))
+	if input.Cwd == "" {
+		ThrowFmt("wrap: input.Cwd is required (endpoint.path must be set)")
 	}
+
+	Throw(os.Chdir(input.Cwd))
+	Throw(os.Setenv("PATH", input.Cwd+":"+os.Getenv("PATH")))
 
 	log := openWrapLog(input.LogPath, input.GUID)
 	defer log.close()
@@ -281,13 +283,19 @@ func runCmd(in *WrapInput) cmdResult {
 	// invocations. Downstream tools (molot, ci check, samogon fetch)
 	// can litter cwd freely.
 	//
-	// `-r -U -m` gives us CAP_SYS_ADMIN in the new user ns so the tmpfs
-	// mount works from an unprivileged endpoint user (gorn_N). The memfd
-	// fd is inherited across the fork+exec chain (no MFD_CLOEXEC above),
-	// so /proc/self/fd/N resolves inside sh just as it would directly.
-	shellScript := "mount -t tmpfs tmpfs . && exec " + path
+	// `-r -U -m` gives us CAP_SYS_ADMIN in the new user ns so the
+	// tmpfs mount works from an unprivileged endpoint user (gorn_N).
+	// `gorn wrap_lower` runs inside the fresh ns and handles the
+	// mount + chdir + execve in Go directly — no shell quoting, no
+	// path string concat. See wrap_lower.go for why the re-chdir is
+	// load-bearing.
+	//
+	// The memfd fd is inherited across the fork+exec chain (no
+	// MFD_CLOEXEC above), so /proc/self/fd/N still resolves in
+	// wrap_lower and the final script.
+	self := Throw2(os.Executable())
 	cmd := exec.Command("/bin/unshare", "-r", "-U", "-m",
-		"/bin/sh", "-c", shellScript)
+		self, "wrap_lower", in.Cwd, path)
 	cmd.Stdout = &stdoutBuf
 	cmd.Stderr = &stderrBuf
 	cmd.Env = os.Environ()
