@@ -275,7 +275,19 @@ func runCmd(in *WrapInput) cmdResult {
 
 	path := fmt.Sprintf("/proc/self/fd/%d", fd)
 
-	cmd := exec.Command(path)
+	// Put the task's cwd behind a per-run tmpfs inside its own user+mount
+	// namespace. When wrap exits the ns dies with it — tmpfs unmounts,
+	// scratch contents disappear, no orphan mkdirs/clones between
+	// invocations. Downstream tools (molot, ci check, samogon fetch)
+	// can litter cwd freely.
+	//
+	// `-r -U -m` gives us CAP_SYS_ADMIN in the new user ns so the tmpfs
+	// mount works from an unprivileged endpoint user (gorn_N). The memfd
+	// fd is inherited across the fork+exec chain (no MFD_CLOEXEC above),
+	// so /proc/self/fd/N resolves inside sh just as it would directly.
+	shellScript := "mount -t tmpfs tmpfs . && exec " + path
+	cmd := exec.Command("/bin/unshare", "-r", "-U", "-m",
+		"/bin/sh", "-c", shellScript)
 	cmd.Stdout = &stdoutBuf
 	cmd.Stderr = &stderrBuf
 	cmd.Env = os.Environ()
