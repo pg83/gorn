@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -177,36 +178,34 @@ func maxHostSlots(eps []Endpoint) int {
 }
 
 func (s *controlServer) handleTasks(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
-	case http.MethodPost:
-		exc := Try(func() {
+	exc := Try(func() {
+		switch r.Method {
+		case http.MethodPost:
 			s.enqueue(w, r)
-		})
-
-		exc.Catch(func(e *Exception) {
-			httpError(w, http.StatusInternalServerError, e.Error())
-		})
-	case http.MethodGet:
-		exc := Try(func() {
+		case http.MethodGet:
 			s.listTasks(w, r)
-		})
+		default:
+			ThrowHTTP(http.StatusMethodNotAllowed, "method not allowed")
+		}
+	})
 
-		exc.Catch(func(e *Exception) {
-			httpError(w, http.StatusInternalServerError, e.Error())
-		})
-	default:
-		httpError(w, http.StatusMethodNotAllowed, "method not allowed")
-	}
+	exc.Catch(func(e *Exception) {
+		sendHTTPException(w, e)
+	})
 }
 
 func (s *controlServer) handleEndpoints(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		httpError(w, http.StatusMethodNotAllowed, "method not allowed")
+	exc := Try(func() {
+		if r.Method != http.MethodGet {
+			ThrowHTTP(http.StatusMethodNotAllowed, "method not allowed")
+		}
 
-		return
-	}
+		httpJSON(w, http.StatusOK, EndpointsResp{Endpoints: s.endpoints})
+	})
 
-	httpJSON(w, http.StatusOK, EndpointsResp{Endpoints: s.endpoints})
+	exc.Catch(func(e *Exception) {
+		sendHTTPException(w, e)
+	})
 }
 
 func (s *controlServer) listTasks(w http.ResponseWriter, r *http.Request) {
@@ -234,9 +233,7 @@ func (s *controlServer) enqueue(w http.ResponseWriter, r *http.Request) {
 	Throw(json.Unmarshal(body, &req))
 
 	if req.Script == "" {
-		httpError(w, http.StatusBadRequest, "script is required")
-
-		return
+		ThrowHTTP(http.StatusBadRequest, "script is required")
 	}
 
 	guid := req.GUID
@@ -258,9 +255,7 @@ func (s *controlServer) enqueue(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if slots > s.maxHostSlots {
-		httpError(w, http.StatusBadRequest, fmt.Sprintf("unschedulable: slots=%d > max host capacity=%d", slots, s.maxHostSlots))
-
-		return
+		ThrowHTTP(http.StatusBadRequest, "unschedulable: slots=%d > max host capacity=%d", slots, s.maxHostSlots)
 	}
 
 	task := Task{
@@ -282,32 +277,26 @@ func (s *controlServer) enqueue(w http.ResponseWriter, r *http.Request) {
 		Commit())
 
 	if !resp.Succeeded {
-		httpError(w, http.StatusConflict, fmt.Sprintf("task with guid %q already exists", guid))
-
-		return
+		ThrowHTTP(http.StatusConflict, "task with guid %q already exists", guid)
 	}
 
 	httpJSON(w, http.StatusOK, EnqueueResp{GUID: guid})
 }
 
 func (s *controlServer) handleTaskByID(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		httpError(w, http.StatusMethodNotAllowed, "method not allowed")
-
-		return
-	}
-
-	path := strings.TrimPrefix(r.URL.Path, "/v1/tasks/")
-	parts := strings.SplitN(path, "/", 2)
-	guid := parts[0]
-
-	if guid == "" {
-		httpError(w, http.StatusBadRequest, "guid required")
-
-		return
-	}
-
 	exc := Try(func() {
+		if r.Method != http.MethodGet {
+			ThrowHTTP(http.StatusMethodNotAllowed, "method not allowed")
+		}
+
+		path := strings.TrimPrefix(r.URL.Path, "/v1/tasks/")
+		parts := strings.SplitN(path, "/", 2)
+		guid := parts[0]
+
+		if guid == "" {
+			ThrowHTTP(http.StatusBadRequest, "guid required")
+		}
+
 		if len(parts) == 2 && parts[1] == "output" {
 			s.getOutput(w, r, guid)
 
@@ -320,39 +309,39 @@ func (s *controlServer) handleTaskByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		httpError(w, http.StatusNotFound, "not found")
+		ThrowHTTP(http.StatusNotFound, "not found")
 	})
 
 	exc.Catch(func(e *Exception) {
-		httpError(w, http.StatusInternalServerError, e.Error())
+		sendHTTPException(w, e)
 	})
 }
 
-// resolveRoot picks the S3 root prefix: explicit ?root= query param
-// wins; otherwise the queued task's Root (from etcd); otherwise "gorn".
-func (s *controlServer) resolveRoot(r *http.Request, guid string) string {
-	if v := r.URL.Query().Get("root"); v != "" {
-		return v
+// requireRoot reads ?root= from the URL. The S3 prefix is part of the
+// protocol — without it the server would have to read the task body
+// from etcd just to learn where result.json lives, which on ignite
+// --wait polls meant pulling the full Script+Env on every tick.
+// Callers must supply root.
+func requireRoot(r *http.Request) string {
+	root := r.URL.Query().Get("root")
+
+	if root == "" {
+		ThrowHTTP(http.StatusBadRequest, "root query param required")
 	}
 
-	resp, err := s.etcd.Get(r.Context(), queueKey(guid))
-
-	if err == nil && resp.Count > 0 {
-		var t Task
-
-		if json.Unmarshal(resp.Kvs[0].Value, &t) == nil && t.Root != "" {
-			return t.Root
-		}
-	}
-
-	return ""
+	return root
 }
 
 func (s *controlServer) getState(w http.ResponseWriter, r *http.Request, guid string) {
+	root := requireRoot(r)
 	state := "not_found"
-	root := s.resolveRoot(r, guid)
 
-	resp := Throw2(s.etcd.Get(r.Context(), queueKey(guid)))
+	// WithCountOnly: server returns only resp.Count, skips Kvs entirely.
+	// Without it, etcd ships the full Task body (Script + Env, up to
+	// several MB for big scripts) on every ignite --wait poll — and
+	// those polls are the bulk of control traffic. Existence is all we
+	// need here.
+	resp := Throw2(s.etcd.Get(r.Context(), queueKey(guid), clientv3.WithCountOnly()))
 
 	if resp.Count > 0 {
 		state = "queued"
@@ -364,13 +353,11 @@ func (s *controlServer) getState(w http.ResponseWriter, r *http.Request, guid st
 }
 
 func (s *controlServer) getOutput(w http.ResponseWriter, r *http.Request, guid string) {
-	root := s.resolveRoot(r, guid)
+	root := requireRoot(r)
 	result := s3GetBytes(r.Context(), s.s3, s.bucket, resultKey(root, guid))
 
 	if result == nil {
-		httpError(w, http.StatusNotFound, "result.json not found for "+guid)
-
-		return
+		ThrowHTTP(http.StatusNotFound, "result.json not found for %s", guid)
 	}
 
 	stdout := s3GetBytes(r.Context(), s.s3, s.bucket, streamKey(root, guid, "stdout"))
@@ -435,4 +422,20 @@ func httpError(w http.ResponseWriter, status int, msg string) {
 
 	data, _ := json.Marshal(map[string]string{"error": msg})
 	_, _ = w.Write(data)
+}
+
+// sendHTTPException is the boundary between our exception-style flow
+// and HTTP status codes. ThrowHTTP raises a typed HTTPError; anything
+// else (etcd timeout, S3 error, JSON unmarshal) is an unexpected
+// failure and maps to 500.
+func sendHTTPException(w http.ResponseWriter, e *Exception) {
+	var he *HTTPError
+
+	if errors.As(e.AsError(), &he) {
+		httpError(w, he.Status, he.Msg)
+
+		return
+	}
+
+	httpError(w, http.StatusInternalServerError, e.Error())
 }

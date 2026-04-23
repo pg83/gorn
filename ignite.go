@@ -124,6 +124,10 @@ func igniteMain(args []string) {
 		ThrowFmt("ignite: --api is required (or set $GORN_API)")
 	}
 
+	if *root == "" {
+		ThrowFmt("ignite: --root must be non-empty")
+	}
+
 	taskGUID := *guid
 
 	if taskGUID == "" {
@@ -259,11 +263,7 @@ func apiEnqueue(api string, req EnqueueReq) (EnqueueResp, bool) {
 }
 
 func apiGetState(api, guid, root string) string {
-	target := strings.TrimRight(api, "/") + "/v1/tasks/" + url.PathEscape(guid)
-
-	if root != "" {
-		target += "?root=" + url.QueryEscape(root)
-	}
+	target := strings.TrimRight(api, "/") + "/v1/tasks/" + url.PathEscape(guid) + "?root=" + url.QueryEscape(root)
 
 	var sr StateResp
 
@@ -333,11 +333,7 @@ func waitForDone(api, guid, root string) {
 }
 
 func fetchAndPrintOutput(api, guid, root string) int {
-	target := strings.TrimRight(api, "/") + "/v1/tasks/" + url.PathEscape(guid) + "/output"
-
-	if root != "" {
-		target += "?root=" + url.QueryEscape(root)
-	}
+	target := strings.TrimRight(api, "/") + "/v1/tasks/" + url.PathEscape(guid) + "/output?root=" + url.QueryEscape(root)
 
 	var out OutputResp
 
