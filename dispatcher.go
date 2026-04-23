@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"math/rand/v2"
 	"os"
 	"sort"
 	"strconv"
@@ -273,36 +274,76 @@ func (d *Dispatcher) runTask(ctx context.Context, task Task, slots int, ref *end
 		d.signal()
 	}()
 
-	if task.Env == nil {
-		task.Env = map[string]string{}
-	}
+	// Try boundary so a panic from inside (SSH dispatch, etcd txn,
+	// anything Throw-family) doesn't kill the whole gorn serve process.
+	// The inflight slot gets released via the defer above regardless.
+	exc := Try(func() {
+		if task.Env == nil {
+			task.Env = map[string]string{}
+		}
 
-	cpus := int(float64(slots*host.cpusPerSlot)*d.cfg.CpuOvercommit + 0.5)
+		cpus := int(float64(slots*host.cpusPerSlot)*d.cfg.CpuOvercommit + 0.5)
 
-	task.Env["MOLOT_SLOTS"] = strconv.Itoa(slots)
-	task.Env["MOLOT_CPUS"] = strconv.Itoa(cpus)
+		task.Env["MOLOT_SLOTS"] = strconv.Itoa(slots)
+		task.Env["MOLOT_CPUS"] = strconv.Itoa(cpus)
 
-	outcome, detail := runTaskOnEndpoint(ctx, ref.ep, task, d.cfg.S3, ref.keyFile)
+		outcome, detail := runTaskOnEndpoint(ctx, ref.ep, task, d.cfg.S3, ref.keyFile)
 
-	fmt.Fprintf(os.Stderr, "task %s on %s@%s (slots=%d cpus=%d): %s (%s)\n", task.GUID, ref.ep.User, ref.ep.Host, slots, cpus, outcome, detail)
+		fmt.Fprintf(os.Stderr, "task %s on %s@%s (slots=%d cpus=%d): %s (%s)\n", task.GUID, ref.ep.User, ref.ep.Host, slots, cpus, outcome, detail)
 
-	switch outcome {
-	case OutcomeSuccess, OutcomeNonRetriable:
-		d.finalize(ctx, task.GUID)
-	case OutcomeRetriable:
-		time.Sleep(3 * time.Second)
-	}
+		switch outcome {
+		case OutcomeSuccess, OutcomeNonRetriable:
+			d.finalize(ctx, task.GUID)
+		case OutcomeRetriable:
+			time.Sleep(3 * time.Second)
+		}
+	})
+
+	exc.Catch(func(e *Exception) {
+		fmt.Fprintf(os.Stderr, "runTask %s: caught panic: %s\n", task.GUID, e.Error())
+	})
 }
 
+// finalize deletes the task's queue key via a leader-fenced txn. Under
+// heavy etcd load the txn times out; we retry with exponential backoff
+// a handful of times before giving up. If we give up, the task stays
+// in the queue and gets re-dispatched on the next pickAll pass — gorn
+// wrap's S3 idempotency makes that cheap (already-done), but the
+// churn is ugly so we prefer to actually delete when possible.
+//
+// `resp.Succeeded == false` (fence compare failed) means we lost
+// leadership between dispatch and finalize. Nothing to retry —
+// somebody else owns the queue now.
 func (d *Dispatcher) finalize(ctx context.Context, guid string) {
+	const maxAttempts = 5
+
 	key := queueKey(guid)
+	delay := time.Second
 
-	resp := Throw2(d.cli.Txn(ctx).
-		If(d.leader.FenceCompare()).
-		Then(clientv3.OpDelete(key)).
-		Commit())
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		resp, err := d.cli.Txn(ctx).
+			If(d.leader.FenceCompare()).
+			Then(clientv3.OpDelete(key)).
+			Commit()
 
-	if !resp.Succeeded {
-		fmt.Fprintln(os.Stderr, "finalize skipped for", guid, "— no longer leader")
+		if err == nil {
+			if !resp.Succeeded {
+				fmt.Fprintln(os.Stderr, "finalize skipped for", guid, "— no longer leader")
+			}
+
+			return
+		}
+
+		if attempt == maxAttempts {
+			fmt.Fprintf(os.Stderr, "finalize %s: gave up after %d attempts (%v); task stays queued, will be re-dispatched\n", guid, maxAttempts, err)
+
+			return
+		}
+
+		sleep := delay + time.Duration(rand.Int64N(int64(delay)))
+		fmt.Fprintf(os.Stderr, "finalize %s: attempt %d/%d failed (%v), retrying in %v\n", guid, attempt, maxAttempts, err, sleep)
+		time.Sleep(sleep)
+
+		delay *= 2
 	}
 }
