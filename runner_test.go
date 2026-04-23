@@ -55,7 +55,7 @@ func TestLastFinishMsg_Empty(t *testing.T) {
 
 func TestClassify_Success(t *testing.T) {
 	stdout := `{"type":"finish","guid":"g","outcome":"completed","exit":0}`
-	out, _ := classify(stdout, "")
+	out, _ := classify(stdout, "", false)
 
 	if out != OutcomeSuccess {
 		t.Errorf("got %v, want success", out)
@@ -64,7 +64,7 @@ func TestClassify_Success(t *testing.T) {
 
 func TestClassify_NonRetriable(t *testing.T) {
 	stdout := `{"type":"finish","guid":"g","outcome":"completed","exit":7}`
-	out, detail := classify(stdout, "")
+	out, detail := classify(stdout, "", false)
 
 	if out != OutcomeNonRetriable {
 		t.Errorf("got %v, want non-retriable", out)
@@ -77,7 +77,7 @@ func TestClassify_NonRetriable(t *testing.T) {
 
 func TestClassify_AlreadyDone(t *testing.T) {
 	stdout := `{"type":"finish","guid":"g","outcome":"already-done"}`
-	out, _ := classify(stdout, "")
+	out, _ := classify(stdout, "", false)
 
 	if out != OutcomeSuccess {
 		t.Errorf("got %v, want success", out)
@@ -85,7 +85,7 @@ func TestClassify_AlreadyDone(t *testing.T) {
 }
 
 func TestClassify_Retriable_NoFinish(t *testing.T) {
-	out, _ := classify("", "permission denied")
+	out, _ := classify("", "permission denied", false)
 
 	if out != OutcomeRetriable {
 		t.Errorf("got %v, want retriable", out)
@@ -94,10 +94,32 @@ func TestClassify_Retriable_NoFinish(t *testing.T) {
 
 func TestClassify_Retriable_UnknownOutcome(t *testing.T) {
 	stdout := `{"type":"finish","guid":"g","outcome":"weird"}`
-	out, _ := classify(stdout, "")
+	out, _ := classify(stdout, "", false)
 
 	if out != OutcomeRetriable {
 		t.Errorf("got %v, want retriable", out)
+	}
+}
+
+func TestClassify_RetryOnError_Promotes(t *testing.T) {
+	stdout := `{"type":"finish","guid":"g","outcome":"completed","exit":7}`
+	out, detail := classify(stdout, "", true)
+
+	if out != OutcomeRetriable {
+		t.Errorf("got %v, want retriable (retry-error on)", out)
+	}
+
+	if detail != "exit 7 (retry-error)" {
+		t.Errorf("got detail %q, want %q", detail, "exit 7 (retry-error)")
+	}
+}
+
+func TestClassify_RetryOnError_ZeroStillSuccess(t *testing.T) {
+	stdout := `{"type":"finish","guid":"g","outcome":"completed","exit":0}`
+	out, _ := classify(stdout, "", true)
+
+	if out != OutcomeSuccess {
+		t.Errorf("got %v, want success (exit 0 regardless of retry-error)", out)
 	}
 }
 

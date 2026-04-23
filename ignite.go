@@ -71,6 +71,7 @@ func igniteMain(args []string) {
 	descr := fs.String("descr", "", "human-readable task description (shown in web UI); defaults to first non-empty line of the script")
 	root := fs.String("root", "cli", "S3 key prefix for this task's artifacts (<root>/<guid>/...)")
 	slots := fs.Int("slots", 0, "number of host slots this task requires; default 1, rejected if larger than any host's slot count")
+	retryOnError := fs.Bool("retry-error", false, "promote completed+non-zero exits from non-retriable to retriable so the leader re-dispatches (opt-in; molot relies on default non-retriable)")
 
 	var envs stringsFlag
 	fs.Var(&envs, "env", "KEY=VALUE (repeatable)")
@@ -129,7 +130,7 @@ func igniteMain(args []string) {
 		taskGUID = newGUID()
 	}
 
-	req := EnqueueReq{GUID: taskGUID, Script: script, Env: parseEnvs(envs), Descr: *descr, Root: *root, Slots: *slots}
+	req := EnqueueReq{GUID: taskGUID, Script: script, Env: parseEnvs(envs), Descr: *descr, Root: *root, Slots: *slots, RetryOnError: *retryOnError}
 	got, existed := apiEnqueue(api, req)
 
 	if !*wait {

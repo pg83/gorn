@@ -20,12 +20,13 @@ import (
 )
 
 type EnqueueReq struct {
-	GUID   string            `json:"guid,omitempty"`
-	Script string            `json:"script"`
-	Env    map[string]string `json:"env,omitempty"`
-	Descr  string            `json:"descr,omitempty"`
-	Root   string            `json:"root,omitempty"`
-	Slots  int               `json:"slots,omitempty"`
+	GUID         string            `json:"guid,omitempty"`
+	Script       string            `json:"script"`
+	Env          map[string]string `json:"env,omitempty"`
+	Descr        string            `json:"descr,omitempty"`
+	Root         string            `json:"root,omitempty"`
+	Slots        int               `json:"slots,omitempty"`
+	RetryOnError bool              `json:"retry_on_error,omitempty"`
 }
 
 type EnqueueResp struct {
@@ -263,13 +264,14 @@ func (s *controlServer) enqueue(w http.ResponseWriter, r *http.Request) {
 	}
 
 	task := Task{
-		GUID:       guid,
-		Script:     req.Script,
-		Env:        req.Env,
-		Descr:      descr,
-		Root:       req.Root,
-		Slots:      slots,
-		EnqueuedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		GUID:         guid,
+		Script:       req.Script,
+		Env:          req.Env,
+		Descr:        descr,
+		Root:         req.Root,
+		Slots:        slots,
+		EnqueuedAt:   time.Now().UTC().Format(time.RFC3339Nano),
+		RetryOnError: req.RetryOnError,
 	}
 	payload := Throw2(json.Marshal(task))
 	key := queueKey(guid)
