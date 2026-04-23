@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"os/exec"
+	"strings"
 	"syscall"
 )
 
@@ -25,6 +26,19 @@ func execMain(args []string) {
 
 	if len(argv) == 0 {
 		ThrowFmt("exec: empty argv")
+	}
+
+	// When the ignite caller sets `--env PATH=…`, wrap appends that
+	// entry to the subprocess envp after its own os.Environ. Linux
+	// preserves duplicates in envp, but Go's os.Getenv returns the
+	// FIRST match — so the ssh-login PATH would beat whatever the
+	// caller passed, and LookPath would search the wrong places.
+	// Walk envp last-wins and Setenv so LookPath honors the PATH
+	// the caller actually specified.
+	for _, e := range os.Environ() {
+		if strings.HasPrefix(e, "PATH=") {
+			Throw(os.Setenv("PATH", e[len("PATH="):]))
+		}
 	}
 
 	path := Throw2(exec.LookPath(argv[0]))
