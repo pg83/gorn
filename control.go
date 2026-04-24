@@ -39,6 +39,11 @@ type StateResp struct {
 	State string `json:"state"`
 }
 
+type QueuedResp struct {
+	GUID   string `json:"guid"`
+	Queued bool   `json:"queued"`
+}
+
 type EndpointInfo struct {
 	Host string `json:"host"`
 	Port int    `json:"port,omitempty"`
@@ -303,6 +308,12 @@ func (s *controlServer) handleTaskByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		if len(parts) == 2 && parts[1] == "queued" {
+			s.getQueued(w, r, guid)
+
+			return
+		}
+
 		if len(parts) == 1 {
 			s.getState(w, r, guid)
 
@@ -330,6 +341,17 @@ func requireRoot(r *http.Request) string {
 	}
 
 	return root
+}
+
+// getQueued is the cheapest possible "is this task still in the queue"
+// probe: one etcd existence check (WithCountOnly so the body never
+// crosses the wire) and a boolean answer. No root, no S3, no fallback.
+// dedup-style callers use this instead of getState because they only
+// need to know whether to fire a new task or not.
+func (s *controlServer) getQueued(w http.ResponseWriter, r *http.Request, guid string) {
+	resp := Throw2(s.etcd.Get(r.Context(), queueKey(guid), clientv3.WithCountOnly()))
+
+	httpJSON(w, http.StatusOK, QueuedResp{GUID: guid, Queued: resp.Count > 0})
 }
 
 func (s *controlServer) getState(w http.ResponseWriter, r *http.Request, guid string) {
