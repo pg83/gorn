@@ -3,6 +3,8 @@ package main
 import (
 	"os"
 	"syscall"
+
+	"golang.org/x/sys/unix"
 )
 
 // wrapLowerMain runs inside the user+mount namespace that `gorn wrap`
@@ -31,5 +33,6 @@ func wrapLowerMain(args []string) {
 
 	Throw(syscall.Mount("tmpfs", cwd, "tmpfs", 0, ""))
 	Throw(syscall.Chdir(cwd))
+	Throw(unix.Setpriority(unix.PRIO_PROCESS, 0, 19))
 	Throw(syscall.Exec(scriptPath, []string{scriptPath}, os.Environ()))
 }
