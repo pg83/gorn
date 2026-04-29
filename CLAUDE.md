@@ -4,6 +4,10 @@ Small Go service. HA queue over etcd; leader dispatches tasks over SSH to worker
 
 See [`README.md`](README.md) for the full picture and [`STYLE.md`](STYLE.md) for code conventions.
 
+## Coding conventions
+
+- Git author: `claude <claude@users.noreply.github.com>`. Commit messages in English.
+
 ## Non-negotiable rules
 
 - **Error handling goes through `Throw` / `Try`** (see `throw.go`). The forbidden shape is pure pass-through — `if err != nil { return err }` that re-types the bubble without doing anything. Use `Throw2(fn())`, `Throw(err)`, `ThrowFmt(...)`; catch at boundaries (`main`, goroutine entries, filter loops) with `Try`. Returning an `error` from your own function *is* fine when the error is substantive — part of the contract, to be branched on by the caller (interface obligations, domain signals like `ErrNotFound`). Details in `STYLE.md`.
