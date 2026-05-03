@@ -71,7 +71,7 @@ func igniteMain(args []string) {
 	descr := fs.String("descr", "", "human-readable task description (shown in web UI); defaults to first non-empty line of the script")
 	root := fs.String("root", "cli", "S3 key prefix for this task's artifacts (<root>/<guid>/...)")
 	slots := fs.Int("slots", 0, "number of host slots this task requires; default 1, rejected if larger than any host's slot count")
-	retryOnError := fs.Int("retry-error", 0, "single exit code that promotes completed+exit==N from non-retriable to retriable so the leader re-dispatches (default 0 = retry disabled). On match, gorn-wrap also skips writing the main result.json so the next dispatch's HEAD-idempotency miss re-runs the script.")
+	retryOnError := fs.Int("retry-error", 0, "single exit code that promotes completed+exit==N from non-retriable to retriable so the leader re-dispatches (omit flag = retry disabled). On match, gorn-wrap also skips writing the main result.json so the next dispatch's HEAD-idempotency miss re-runs the script.")
 
 	var envs stringsFlag
 	fs.Var(&envs, "env", "KEY=VALUE (repeatable)")
@@ -134,7 +134,15 @@ func igniteMain(args []string) {
 		taskGUID = newGUID()
 	}
 
-	req := EnqueueReq{GUID: taskGUID, Script: script, Env: parseEnvs(envs), Descr: *descr, Root: *root, Slots: *slots, RetryOnError: *retryOnError}
+	var retryPtr *int
+
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "retry-error" {
+			retryPtr = retryOnError
+		}
+	})
+
+	req := EnqueueReq{GUID: taskGUID, Script: script, Env: parseEnvs(envs), Descr: *descr, Root: *root, Slots: *slots, RetryOnError: retryPtr}
 	got, existed := apiEnqueue(api, req)
 
 	if !*wait {

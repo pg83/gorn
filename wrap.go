@@ -29,7 +29,7 @@ type WrapInput struct {
 	Cwd          string            `json:"cwd,omitempty"`
 	S3           S3Config          `json:"s3"`
 	LogPath      string            `json:"log_path,omitempty"`
-	RetryOnError int               `json:"retry_on_error,omitempty"`
+	RetryOnError *int              `json:"retry_on_error,omitempty"`
 }
 
 type WrapResult struct {
@@ -109,7 +109,7 @@ func wrapBody(input *WrapInput, log *wrapLog) {
 	r := runCmd(input)
 	log.logf("command finished: exit=%d duration=%.3fs stdout_len=%d stderr_len=%d", r.ExitCode, r.FinishedAt.Sub(r.StartedAt).Seconds(), len(r.Stdout), len(r.Stderr))
 
-	retriable := input.RetryOnError != 0 && r.ExitCode == input.RetryOnError
+	retriable := input.RetryOnError != nil && r.ExitCode == *input.RetryOnError
 
 	log.logf("uploading to s3 bucket=%s prefix=%s/%s/ retriable=%v", input.S3.Bucket, rootOr(input.Root), input.GUID, retriable)
 	uploadResult(ctx, cli, input, r, log, retriable)
