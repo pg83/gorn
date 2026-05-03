@@ -55,7 +55,7 @@ func TestLastFinishMsg_Empty(t *testing.T) {
 
 func TestClassify_Success(t *testing.T) {
 	stdout := `{"type":"finish","guid":"g","outcome":"completed","exit":0}`
-	out, _ := classify(stdout, "", false)
+	out, _ := classify(stdout, "", 0)
 
 	if out != OutcomeSuccess {
 		t.Errorf("got %v, want success", out)
@@ -64,7 +64,7 @@ func TestClassify_Success(t *testing.T) {
 
 func TestClassify_NonRetriable(t *testing.T) {
 	stdout := `{"type":"finish","guid":"g","outcome":"completed","exit":7}`
-	out, detail := classify(stdout, "", false)
+	out, detail := classify(stdout, "", 0)
 
 	if out != OutcomeNonRetriable {
 		t.Errorf("got %v, want non-retriable", out)
@@ -77,7 +77,7 @@ func TestClassify_NonRetriable(t *testing.T) {
 
 func TestClassify_AlreadyDone(t *testing.T) {
 	stdout := `{"type":"finish","guid":"g","outcome":"already-done"}`
-	out, _ := classify(stdout, "", false)
+	out, _ := classify(stdout, "", 0)
 
 	if out != OutcomeSuccess {
 		t.Errorf("got %v, want success", out)
@@ -85,7 +85,7 @@ func TestClassify_AlreadyDone(t *testing.T) {
 }
 
 func TestClassify_Retriable_NoFinish(t *testing.T) {
-	out, _ := classify("", "permission denied", false)
+	out, _ := classify("", "permission denied", 0)
 
 	if out != OutcomeRetriable {
 		t.Errorf("got %v, want retriable", out)
@@ -94,32 +94,40 @@ func TestClassify_Retriable_NoFinish(t *testing.T) {
 
 func TestClassify_Retriable_UnknownOutcome(t *testing.T) {
 	stdout := `{"type":"finish","guid":"g","outcome":"weird"}`
-	out, _ := classify(stdout, "", false)
+	out, _ := classify(stdout, "", 0)
 
 	if out != OutcomeRetriable {
 		t.Errorf("got %v, want retriable", out)
 	}
 }
 
-func TestClassify_RetryOnError_Promotes(t *testing.T) {
-	stdout := `{"type":"finish","guid":"g","outcome":"completed","exit":7}`
-	out, detail := classify(stdout, "", true)
+func TestClassify_RetryOnError_MatchPromotes(t *testing.T) {
+	stdout := `{"type":"finish","guid":"g","outcome":"completed","exit":100}`
+	out, detail := classify(stdout, "", 100)
 
 	if out != OutcomeRetriable {
-		t.Errorf("got %v, want retriable (retry-error on)", out)
+		t.Errorf("got %v, want retriable (retry-error matches)", out)
 	}
 
-	if detail != "exit 7 (retry-error)" {
-		t.Errorf("got detail %q, want %q", detail, "exit 7 (retry-error)")
+	if detail != "exit 100 (retry-error)" {
+		t.Errorf("got detail %q, want %q", detail, "exit 100 (retry-error)")
+	}
+}
+
+func TestClassify_RetryOnError_NonMatchStaysNonRetriable(t *testing.T) {
+	stdout := `{"type":"finish","guid":"g","outcome":"completed","exit":7}`
+	out, _ := classify(stdout, "", 100)
+
+	if out != OutcomeNonRetriable {
+		t.Errorf("got %v, want non-retriable (exit 7 != retry-error 100)", out)
 	}
 }
 
 func TestClassify_RetryOnError_ZeroStillSuccess(t *testing.T) {
 	stdout := `{"type":"finish","guid":"g","outcome":"completed","exit":0}`
-	out, _ := classify(stdout, "", true)
+	out, _ := classify(stdout, "", 100)
 
 	if out != OutcomeSuccess {
 		t.Errorf("got %v, want success (exit 0 regardless of retry-error)", out)
 	}
 }
-

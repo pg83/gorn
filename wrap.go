@@ -21,14 +21,15 @@ import (
 )
 
 type WrapInput struct {
-	GUID    string            `json:"guid"`
-	Script  string            `json:"script"`
-	Env     map[string]string `json:"env,omitempty"`
-	User    string            `json:"user"`
-	Root    string            `json:"root,omitempty"`
-	Cwd     string            `json:"cwd,omitempty"`
-	S3      S3Config          `json:"s3"`
-	LogPath string            `json:"log_path,omitempty"`
+	GUID         string            `json:"guid"`
+	Script       string            `json:"script"`
+	Env          map[string]string `json:"env,omitempty"`
+	User         string            `json:"user"`
+	Root         string            `json:"root,omitempty"`
+	Cwd          string            `json:"cwd,omitempty"`
+	S3           S3Config          `json:"s3"`
+	LogPath      string            `json:"log_path,omitempty"`
+	RetryOnError int               `json:"retry_on_error,omitempty"`
 }
 
 type WrapResult struct {
@@ -108,8 +109,10 @@ func wrapBody(input *WrapInput, log *wrapLog) {
 	r := runCmd(input)
 	log.logf("command finished: exit=%d duration=%.3fs stdout_len=%d stderr_len=%d", r.ExitCode, r.FinishedAt.Sub(r.StartedAt).Seconds(), len(r.Stdout), len(r.Stderr))
 
-	log.logf("uploading to s3 bucket=%s prefix=gorn/%s/", input.S3.Bucket, input.GUID)
-	uploadResult(ctx, cli, input, r, log)
+	retriable := input.RetryOnError != 0 && r.ExitCode == input.RetryOnError
+
+	log.logf("uploading to s3 bucket=%s prefix=%s/%s/ retriable=%v", input.S3.Bucket, rootOr(input.Root), input.GUID, retriable)
+	uploadResult(ctx, cli, input, r, log, retriable)
 	log.logf("upload done")
 
 	emitFinish(FinishMsg{
@@ -119,7 +122,7 @@ func wrapBody(input *WrapInput, log *wrapLog) {
 		Exit:    r.ExitCode,
 	})
 
-	log.logf("finish emitted: outcome=completed exit=%d", r.ExitCode)
+	log.logf("finish emitted: outcome=completed exit=%d retriable=%v", r.ExitCode, retriable)
 }
 
 type wrapLog struct {
@@ -329,7 +332,7 @@ func runCmd(in *WrapInput) cmdResult {
 	}
 }
 
-func uploadResult(ctx context.Context, cli *s3.Client, in *WrapInput, r cmdResult, log *wrapLog) {
+func uploadResult(ctx context.Context, cli *s3.Client, in *WrapInput, r cmdResult, log *wrapLog, retriable bool) {
 	bucket := in.S3.Bucket
 
 	putBytes(ctx, cli, bucket, streamKey(in.Root, in.GUID, "stdout"), r.Stdout, log)
@@ -348,6 +351,17 @@ func uploadResult(ctx context.Context, cli *s3.Client, in *WrapInput, r cmdResul
 	}
 
 	payload := Throw2(json.Marshal(result))
+
+	// On retriable exit (RetryOnError matched), keep the main result.json
+	// slot empty so the next dispatch's HEAD-idempotency miss re-runs the
+	// script. Write a debug copy under retry-<exit>.json so each failed
+	// attempt's metadata is still observable. Stdout/stderr always go up
+	// at the canonical path.
+	if retriable {
+		putBytes(ctx, cli, bucket, retryResultKey(in.Root, in.GUID, r.ExitCode), payload, log)
+
+		return
+	}
 
 	putBytes(ctx, cli, bucket, resultKey(in.Root, in.GUID), payload, log)
 }
@@ -379,6 +393,10 @@ func rootOr(root string) string {
 
 func resultKey(root, guid string) string {
 	return rootOr(root) + "/" + guid + "/result.json"
+}
+
+func retryResultKey(root, guid string, exit int) string {
+	return fmt.Sprintf("%s/%s/retry-%d.json", rootOr(root), guid, exit)
 }
 
 func streamKey(root, guid, name string) string {

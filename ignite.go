@@ -71,7 +71,7 @@ func igniteMain(args []string) {
 	descr := fs.String("descr", "", "human-readable task description (shown in web UI); defaults to first non-empty line of the script")
 	root := fs.String("root", "cli", "S3 key prefix for this task's artifacts (<root>/<guid>/...)")
 	slots := fs.Int("slots", 0, "number of host slots this task requires; default 1, rejected if larger than any host's slot count")
-	retryOnError := fs.Bool("retry-error", false, "promote completed+non-zero exits from non-retriable to retriable so the leader re-dispatches (opt-in; molot relies on default non-retriable)")
+	retryOnError := fs.Int("retry-error", 0, "single exit code that promotes completed+exit==N from non-retriable to retriable so the leader re-dispatches (default 0 = retry disabled). On match, gorn-wrap also skips writing the main result.json so the next dispatch's HEAD-idempotency miss re-runs the script.")
 
 	var envs stringsFlag
 	fs.Var(&envs, "env", "KEY=VALUE (repeatable)")

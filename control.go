@@ -27,7 +27,7 @@ type EnqueueReq struct {
 	Descr        string            `json:"descr,omitempty"`
 	Root         string            `json:"root,omitempty"`
 	Slots        int               `json:"slots,omitempty"`
-	RetryOnError bool              `json:"retry_on_error,omitempty"`
+	RetryOnError int               `json:"retry_on_error,omitempty"`
 }
 
 type EnqueueResp struct {

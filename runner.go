@@ -109,7 +109,7 @@ func doRunTask(ctx context.Context, ep Endpoint, task Task, s3cfg S3Config, keyF
 	return outcome, detail
 }
 
-func classify(stdout, stderr string, retryOnError bool) (RunOutcome, string) {
+func classify(stdout, stderr string, retryOnError int) (RunOutcome, string) {
 	finish := lastFinishMsg(stdout)
 
 	if finish == nil {
@@ -125,7 +125,7 @@ func classify(stdout, stderr string, retryOnError bool) (RunOutcome, string) {
 			return OutcomeSuccess, "exit 0"
 		}
 
-		if retryOnError {
+		if retryOnError != 0 && finish.Exit == retryOnError {
 			return OutcomeRetriable, fmt.Sprintf("exit %d (retry-error)", finish.Exit)
 		}
 
