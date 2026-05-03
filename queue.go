@@ -14,9 +14,11 @@ import (
 // eventually reap — no online migration, no half-deserialized rows.
 //
 //   queue_v1 — Cmd []string (up to 2026-04-20)
-//   queue_v2 — Script string (current)
+//   queue_v2 — Script string (up to 2026-05-03)
+//   queue_v3 — RetryOnError *int (was bool); molot-side `molot exec`
+//              replaces wrap.sh.tmpl.
 const (
-	queuePrefix          = "/gorn/queue_v2/"
+	queuePrefix          = "/gorn/queue_v3/"
 	leaderElectionPrefix = "/gorn/election/"
 )
 
