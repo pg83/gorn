@@ -50,14 +50,15 @@ func runTaskOnEndpoint(ctx context.Context, ep Endpoint, task Task, s3cfg S3Conf
 
 func doRunTask(ctx context.Context, ep Endpoint, task Task, s3cfg S3Config, keyFile *os.File) (RunOutcome, string) {
 	input := WrapInput{
-		GUID:    task.GUID,
-		Script:  task.Script,
-		Env:     task.Env,
-		User:    ep.User,
-		Root:    task.Root,
-		Cwd:     ep.Path,
-		S3:      s3cfg,
-		LogPath: ep.LogPath,
+		GUID:         task.GUID,
+		Script:       task.Script,
+		Env:          task.Env,
+		User:         ep.User,
+		Root:         task.Root,
+		Cwd:          ep.Path,
+		S3:           s3cfg,
+		LogPath:      ep.LogPath,
+		RetryOnError: task.RetryOnError,
 	}
 
 	inputJSON := Throw2(json.Marshal(input))
