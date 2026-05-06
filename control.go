@@ -295,27 +295,34 @@ func (s *controlServer) handleTaskByID(w http.ResponseWriter, r *http.Request) {
 		}
 
 		path := strings.TrimPrefix(r.URL.Path, "/v1/tasks/")
-		parts := strings.SplitN(path, "/", 2)
+		parts := strings.SplitN(path, "/", 3)
 		guid := parts[0]
 
 		if guid == "" {
 			ThrowHTTP(http.StatusBadRequest, "guid required")
 		}
 
-		if len(parts) == 2 && parts[1] == "output" {
+		if len(parts) == 1 {
+			s.getState(w, r, guid)
+
+			return
+		}
+
+		switch parts[1] {
+		case "output":
 			s.getOutput(w, r, guid)
 
 			return
-		}
-
-		if len(parts) == 2 && parts[1] == "queued" {
+		case "queued":
 			s.getQueued(w, r, guid)
 
 			return
-		}
+		case "content":
+			if len(parts) != 3 || parts[2] == "" {
+				ThrowHTTP(http.StatusBadRequest, "expected /v1/tasks/<guid>/content/<name>")
+			}
 
-		if len(parts) == 1 {
-			s.getState(w, r, guid)
+			s.getContent(w, r, guid, parts[2])
 
 			return
 		}
@@ -372,6 +379,49 @@ func (s *controlServer) getState(w http.ResponseWriter, r *http.Request, guid st
 	}
 
 	httpJSON(w, http.StatusOK, StateResp{GUID: guid, State: state})
+}
+
+func (s *controlServer) getContent(w http.ResponseWriter, r *http.Request, guid, name string) {
+	if strings.ContainsAny(name, "/") || name == "." || name == ".." {
+		ThrowHTTP(http.StatusBadRequest, "invalid content name %q", name)
+	}
+
+	root := requireRoot(r)
+	key := streamKey(root, guid, name)
+
+	resp, err := s.s3.GetObject(r.Context(), &s3.GetObjectInput{
+		Bucket: aws.String(s.bucket),
+		Key:    aws.String(key),
+	})
+
+	if err != nil {
+		if isS3NotFound(err) {
+			ThrowHTTP(http.StatusNotFound, "%s not found for %s", name, guid)
+		}
+
+		Throw(err)
+	}
+
+	defer resp.Body.Close()
+
+	w.Header().Set("Content-Type", contentTypeOf(name))
+
+	if resp.ContentLength != nil {
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", *resp.ContentLength))
+	}
+
+	Throw2(io.Copy(w, resp.Body))
+}
+
+func contentTypeOf(name string) string {
+	switch {
+	case strings.HasSuffix(name, ".json"):
+		return "application/json"
+	case strings.HasSuffix(name, ".zstd"), strings.HasSuffix(name, ".zst"):
+		return "application/zstd"
+	}
+
+	return "application/octet-stream"
 }
 
 func (s *controlServer) getOutput(w http.ResponseWriter, r *http.Request, guid string) {
