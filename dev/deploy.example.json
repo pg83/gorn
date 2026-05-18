@@ -1,0 +1,30 @@
+{
+  "gorn_bin": "./gorn",
+  "remote_gorn_path": "/usr/local/bin/gorn",
+  "run_dir": "./run",
+
+  "endpoints": [
+    {"host": "n1.lan", "port": 22, "user": "gorn-w1", "path": "/srv/gorn/w1"},
+    {"host": "n1.lan", "port": 22, "user": "gorn-w2", "path": "/srv/gorn/w2"},
+    {"host": "n2.lan", "port": 22, "user": "gorn-w3", "path": "/srv/gorn/w3"},
+    {"host": "n2.lan", "port": 22, "user": "gorn-w4", "path": "/srv/gorn/w4"}
+  ],
+  "cpus_per_slot": 2,
+
+  "etcd": {"endpoints": ["http://127.0.0.1:2379"]},
+
+  "s3": {
+    "endpoint": "http://127.0.0.1:9000",
+    "region": "us-east-1",
+    "bucket": "gorn",
+    "access_key": "${MINIO_ACCESS_KEY}",
+    "secret_key": "${MINIO_SECRET_KEY}",
+    "use_path_style": true
+  },
+
+  "ssh_key_path": "/home/me/.ssh/id_ed25519",
+
+  "control": {"listen": "127.0.0.1:7878"},
+  "web":     {"api": "http://127.0.0.1:7878", "listen": "127.0.0.1:7979"},
+  "prom":    {"listen": "127.0.0.1:7280"}
+}
