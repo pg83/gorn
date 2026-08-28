@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -106,7 +107,7 @@ func wrapBody(input *WrapInput, log *wrapLog) {
 	}
 
 	log.logf("running command")
-	r := runCmd(input)
+	r := runCmd(input, log)
 	log.logf("command finished: exit=%d duration=%.3fs stdout_len=%d stderr_len=%d", r.ExitCode, r.FinishedAt.Sub(r.StartedAt).Seconds(), len(r.Stdout), len(r.Stderr))
 
 	retriable := input.RetryOnError != nil && r.ExitCode == *input.RetryOnError
@@ -128,7 +129,26 @@ func wrapBody(input *WrapInput, log *wrapLog) {
 type wrapLog struct {
 	f    *os.File
 	guid string
+	mu   sync.Mutex
 }
+
+type wrapTaskLogRecord struct {
+	TS      string `json:"ts"`
+	GUID    string `json:"guid"`
+	Root    string `json:"root"`
+	Stream  string `json:"stream"`
+	Line    string `json:"line"`
+	Partial bool   `json:"partial,omitempty"`
+}
+
+type wrapTaskLogWriter struct {
+	log     *wrapLog
+	root    string
+	stream  string
+	pending []byte
+}
+
+const wrapTaskLogChunk = 64 * 1024
 
 func openWrapLog(path, guid string) *wrapLog {
 	if path == "" {
@@ -156,13 +176,88 @@ func (l *wrapLog) logf(format string, args ...any) {
 	msg := fmt.Sprintf(format, args...)
 	line := fmt.Sprintf("[%s] guid=%s %s\n", time.Now().UTC().Format(time.RFC3339Nano), l.guid, msg)
 
-	_, _ = l.f.WriteString(line)
+	l.write([]byte(line))
+}
+
+func (l *wrapLog) taskLine(root, stream string, line []byte, partial bool) {
+	if l == nil || l.f == nil {
+		return
+	}
+
+	rec := wrapTaskLogRecord{
+		TS:      time.Now().UTC().Format(time.RFC3339Nano),
+		GUID:    l.guid,
+		Root:    rootOr(root),
+		Stream:  stream,
+		Line:    string(line),
+		Partial: partial,
+	}
+
+	data := Throw2(json.Marshal(rec))
+	data = append(data, '\n')
+	l.write(data)
+}
+
+func (l *wrapLog) write(data []byte) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	_, _ = l.f.Write(data)
 }
 
 func (l *wrapLog) close() {
 	if l != nil && l.f != nil {
+		l.mu.Lock()
+		defer l.mu.Unlock()
 		_ = l.f.Close()
 	}
+}
+
+func newWrapTaskLogWriter(log *wrapLog, root, stream string) *wrapTaskLogWriter {
+	return &wrapTaskLogWriter{log: log, root: root, stream: stream}
+}
+
+func (w *wrapTaskLogWriter) Write(data []byte) (int, error) {
+	n := len(data)
+
+	for len(data) > 0 {
+		i := bytes.IndexByte(data, '\n')
+
+		if i < 0 {
+			w.append(data)
+
+			break
+		}
+
+		w.append(data[:i])
+		w.flush(false)
+		data = data[i+1:]
+	}
+
+	return n, nil
+}
+
+func (w *wrapTaskLogWriter) append(data []byte) {
+	w.pending = append(w.pending, data...)
+
+	for len(w.pending) > wrapTaskLogChunk {
+		w.log.taskLine(w.root, w.stream, w.pending[:wrapTaskLogChunk], true)
+		copy(w.pending, w.pending[wrapTaskLogChunk:])
+		w.pending = w.pending[:len(w.pending)-wrapTaskLogChunk]
+	}
+}
+
+func (w *wrapTaskLogWriter) flush(partial bool) {
+	w.log.taskLine(w.root, w.stream, w.pending, partial)
+	w.pending = w.pending[:0]
+}
+
+func (w *wrapTaskLogWriter) Close() error {
+	if len(w.pending) > 0 {
+		w.flush(false)
+	}
+
+	return nil
 }
 
 func sortedKeys(m map[string]string) []string {
@@ -265,8 +360,12 @@ func isS3NotFound(err error) bool {
 // The kernel's binfmt_script handler reads the shebang off the memfd
 // and spawns the interpreter, which then reads the script off the
 // same inherited fd via /proc/self/fd/N.
-func runCmd(in *WrapInput) cmdResult {
+func runCmd(in *WrapInput, log *wrapLog) cmdResult {
 	var stdoutBuf, stderrBuf bytes.Buffer
+	stdoutLog := newWrapTaskLogWriter(log, in.Root, "stdout")
+	stderrLog := newWrapTaskLogWriter(log, in.Root, "stderr")
+	defer stdoutLog.Close()
+	defer stderrLog.Close()
 
 	// Don't set MFD_CLOEXEC: the fd must survive fork+exec so the child
 	// (the script interpreter) can see the body via /proc/self/fd/N.
@@ -299,8 +398,8 @@ func runCmd(in *WrapInput) cmdResult {
 	self := Throw2(os.Executable())
 	cmd := exec.Command("/bin/unshare", "-r", "-U", "-m",
 		self, "wrap_lower", in.Cwd, path)
-	cmd.Stdout = &stdoutBuf
-	cmd.Stderr = &stderrBuf
+	cmd.Stdout = io.MultiWriter(&stdoutBuf, stdoutLog)
+	cmd.Stderr = io.MultiWriter(&stderrBuf, stderrLog)
 	cmd.Env = os.Environ()
 
 	for k, v := range in.Env {

@@ -204,7 +204,7 @@ for a starting point and the table below for the full schema.
       "user": "gorn-w1",               // required: SSH user; one task at a time per user
       "path": "/srv/gorn/w1",          // required: cwd on the worker; gorn wrap chdirs here
       "ssh_key": "-----BEGIN…",        // optional: per-endpoint key body (PEM)
-      "log_path": "/srv/gorn/w1/.log"  // optional: append-only diagnostic log on the worker
+      "log_path": "/srv/gorn/w1/.log"  // optional: append-only diagnostics and live task stdout/stderr
     }
   ],
   "hosts": {                           // required: per-host knobs
@@ -344,6 +344,9 @@ incompatibly. Old keys are left in place; nothing reads them.
   stderr block. Usual causes: `gorn` binary not on the worker user's PATH,
   unprivileged user namespaces disabled (`unshare` fails), endpoint `path`
   not writable.
+- **Need output before a task finishes** → follow the worker's `log_path`.
+  Task stdout/stderr is written there as JSONL with `guid`, `root`, `stream`,
+  and `line` fields. The final byte-exact streams remain in S3.
 - **`already-done` for a task that hasn't finished** → there's a stale
   `result.json` in S3 from a previous (possibly failed) run with the same
   GUID. `gorn` treats `result.json` presence as authoritative by design. Delete
