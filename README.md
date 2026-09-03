@@ -41,7 +41,7 @@ Designed for a homelab: three nodes run the daemon, one is elected leader via et
 ```
 gorn serve   --config path                                             # daemon, runs on every HA node; elects leader, dispatches
 gorn control --config path                                             # HTTP JSON RPC in front of etcd + S3; used by ignite/web
-gorn web     --config path                                             # Bootstrap dashboard over the control API (read-only)
+gorn web     --config path                                             # Bootstrap queue + endpoints pages over the control API (read-only)
 gorn wrap                                                              # invoked on workers via ssh, reads stdin JSON
 gorn ignite  --api URL [--guid G] [--env K=V ...] [--wait] -- cmd args...
 ```
@@ -81,7 +81,7 @@ Fields:
 - `etcd.endpoints[]`: etcd cluster URLs. Accepts `host:port` or `scheme://host:port` — the etcd v3 client handles both.
 - `s3`: `{endpoint, region, bucket, access_key, secret_key, use_path_style}`. `endpoint` empty means AWS default. `use_path_style=true` for MinIO.
 - `control.listen`: address for `gorn control` to bind its HTTP JSON RPC, e.g. `"127.0.0.1:7878"`. Required only for `control`; `serve` ignores it.
-- `web.api` / `web.listen`: control URL and bind address for `gorn web`. Required only for `web`.
+- `web.api` / `web.listen`: control URL and bind address for `gorn web`. The queue is at `/`; workers are at `/endpoints`. Required only for `web`.
 - `ssh_key_path`: private key the daemon uses to connect to endpoints. Optional if every endpoint provides its own `ssh_key`.
 
 ### `${VAR}` expansion

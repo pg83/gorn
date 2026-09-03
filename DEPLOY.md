@@ -170,9 +170,10 @@ on `ignite --wait` polls means shipping the whole script on every tick.
 gorn web --config /etc/gorn/config.json
 ```
 
-HTML at `web.listen`. Refreshes every 2s, renders `/v1/endpoints` and
-`/v1/tasks` as Bootstrap tables. Read-only; talks to `control` over HTTP
-(`web.api`), never to etcd or S3 directly.
+HTML at `web.listen`. The main page renders the queue from `/v1/tasks`; the
+`/endpoints` page renders workers from `/v1/endpoints`. Both refresh every 2s.
+Read-only; talks to `control` over HTTP (`web.api`), never to etcd or S3
+directly.
 
 ### `prom`
 

@@ -41,6 +41,7 @@ func webMain(args []string) {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", srv.handleIndex)
+	mux.HandleFunc("/endpoints", srv.handleEndpoints)
 
 	server := &http.Server{Addr: cfg.Web.Listen, Handler: mux}
 
@@ -78,7 +79,8 @@ type taskRow struct {
 	Age        string
 }
 
-type indexData struct {
+type pageData struct {
+	Page      string
 	Endpoints []EndpointInfo
 	Tasks     []taskRow
 	API       string
@@ -91,13 +93,19 @@ var dashboardTmpl = template.Must(template.New("dashboard").Parse(`<!DOCTYPE htm
 <head>
 <meta charset="utf-8">
 <meta http-equiv="refresh" content="2">
-<title>gorn cluster</title>
+<title>gorn {{.Page}}</title>
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
 </head>
 <body class="bg-light">
 <div class="container py-4">
   <div class="d-flex justify-content-between align-items-baseline mb-3">
-    <h1 class="mb-0">gorn cluster</h1>
+    <div class="d-flex align-items-baseline gap-3">
+      <h1 class="mb-0">gorn</h1>
+      <nav class="nav nav-pills">
+        <a class="nav-link {{if eq .Page "queue"}}active{{end}}" href="/">Queue</a>
+        <a class="nav-link {{if eq .Page "endpoints"}}active{{end}}" href="/endpoints">Endpoints</a>
+      </nav>
+    </div>
     <small class="text-muted">refresh 2s · {{.Now}} · api {{.API}}</small>
   </div>
 
@@ -105,6 +113,21 @@ var dashboardTmpl = template.Must(template.New("dashboard").Parse(`<!DOCTYPE htm
   <div class="alert alert-danger"><code>{{.Error}}</code></div>
   {{end}}
 
+  {{if eq .Page "queue"}}
+  <h3>Queue <span class="badge bg-secondary">{{len .Tasks}}</span></h3>
+  <table class="table table-sm table-striped table-bordered bg-white">
+    <thead class="table-dark">
+      <tr><th>guid</th><th>descr</th><th>enqueued</th><th>age</th></tr>
+    </thead>
+    <tbody>
+    {{range .Tasks}}
+      <tr><td><code>{{.GUID}}</code></td><td><code>{{.Descr}}</code></td><td><small>{{.EnqueuedAt}}</small></td><td>{{.Age}}</td></tr>
+    {{else}}
+      <tr><td colspan="4" class="text-muted">queue is empty</td></tr>
+    {{end}}
+    </tbody>
+  </table>
+  {{else}}
   <h3>Endpoints <span class="badge bg-secondary">{{len .Endpoints}}</span></h3>
   <table class="table table-sm table-striped table-bordered bg-white">
     <thead class="table-dark">
@@ -118,20 +141,7 @@ var dashboardTmpl = template.Must(template.New("dashboard").Parse(`<!DOCTYPE htm
     {{end}}
     </tbody>
   </table>
-
-  <h3 class="mt-4">Queue <span class="badge bg-secondary">{{len .Tasks}}</span></h3>
-  <table class="table table-sm table-striped table-bordered bg-white">
-    <thead class="table-dark">
-      <tr><th>guid</th><th>descr</th><th>enqueued</th><th>age</th></tr>
-    </thead>
-    <tbody>
-    {{range .Tasks}}
-      <tr><td><code>{{.GUID}}</code></td><td><code>{{.Descr}}</code></td><td><small>{{.EnqueuedAt}}</small></td><td>{{.Age}}</td></tr>
-    {{else}}
-      <tr><td colspan="4" class="text-muted">queue is empty</td></tr>
-    {{end}}
-    </tbody>
-  </table>
+  {{end}}
 </div>
 </body>
 </html>`))
@@ -143,13 +153,9 @@ func (s *webServer) handleIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	data := indexData{API: s.api, Now: time.Now().UTC().Format(time.RFC3339)}
+	data := pageData{Page: "queue", API: s.api, Now: time.Now().UTC().Format(time.RFC3339)}
 
 	exc := Try(func() {
-		var eps EndpointsResp
-		s.getJSON(r.Context(), "/v1/endpoints", &eps)
-		data.Endpoints = eps.Endpoints
-
 		var tasks TaskListResp
 		s.getJSON(r.Context(), "/v1/tasks", &tasks)
 
@@ -164,6 +170,29 @@ func (s *webServer) handleIndex(w http.ResponseWriter, r *http.Request) {
 				Age:        taskAge(now, t.EnqueuedAt),
 			}
 		}
+	})
+
+	exc.Catch(func(e *Exception) {
+		data.Error = e.Error()
+	})
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_ = dashboardTmpl.Execute(w, data)
+}
+
+func (s *webServer) handleEndpoints(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/endpoints" {
+		http.NotFound(w, r)
+
+		return
+	}
+
+	data := pageData{Page: "endpoints", API: s.api, Now: time.Now().UTC().Format(time.RFC3339)}
+
+	exc := Try(func() {
+		var eps EndpointsResp
+		s.getJSON(r.Context(), "/v1/endpoints", &eps)
+		data.Endpoints = eps.Endpoints
 	})
 
 	exc.Catch(func(e *Exception) {
