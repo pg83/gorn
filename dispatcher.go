@@ -24,8 +24,10 @@ type Dispatcher struct {
 	hosts     map[string]*hostState
 	hostNames []string // sorted; deterministic iteration
 
-	mu       sync.Mutex
-	inflight map[string]struct{}
+	mu sync.Mutex
+	// guid -> host the task was dispatched to. Doubles as the busy set
+	// for pickAll and as the source for the inflight handle.
+	inflight map[string]string
 
 	wake chan struct{}
 }
@@ -83,7 +85,7 @@ func NewDispatcher(cli *clientv3.Client, leader *Leader, cfg *Config, keyFiles [
 		index:     NewQueueIndex(cli),
 		hosts:     hosts,
 		hostNames: names,
-		inflight:  make(map[string]struct{}),
+		inflight:  make(map[string]string),
 		wake:      make(chan struct{}, 1),
 	}
 }
@@ -191,6 +193,22 @@ func (d *Dispatcher) schedulerLoop(ctx context.Context) {
 }
 
 // pickAll scans the queue in priority order, tries to dispatch every eligible
+// Inflight returns a copy of guid -> host for the tasks running right now.
+// Only the leader dispatches, so only the leader's answer is meaningful;
+// control resolves the leader through etcd before asking.
+func (d *Dispatcher) Inflight() map[string]string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	out := make(map[string]string, len(d.inflight))
+
+	for guid, host := range d.inflight {
+		out[guid] = host
+	}
+
+	return out
+}
+
 // task to a host with capacity. Skips tasks whose slot count exceeds every
 // host's capacity (unschedulable — already rejected at enqueue, but defense
 // in depth). Tasks that fit but can't acquire right now wait for the next
@@ -220,7 +238,7 @@ func (d *Dispatcher) pickAll(ctx context.Context) {
 			continue
 		}
 
-		d.inflight[task.GUID] = struct{}{}
+		d.inflight[task.GUID] = ref.ep.Host
 		d.mu.Unlock()
 
 		go d.runTask(ctx, task, slots, ref, host)

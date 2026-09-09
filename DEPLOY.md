@@ -114,9 +114,9 @@ One binary, eight subcommands. The ones that are servers:
 
 | Subcommand | Where it runs | What it does | Config blocks read |
 |------------|---------------|--------------|--------------------|
-| `serve`    | master | Campaigns for leadership, dispatches queued tasks over SSH | `endpoints`, `hosts`, `etcd`, `s3`, `ssh_key_path` |
-| `control`  | master | HTTP JSON API in front of etcd + S3 (enqueue / list / state / output) | `endpoints` (for `/v1/endpoints`), `etcd`, `s3`, `control.listen` |
-| `web`      | master | Read-only Bootstrap dashboard, polls `control` over HTTP | `web.api`, `web.listen` |
+| `serve`    | master | Campaigns for leadership, dispatches queued tasks over SSH, serves `/v1/inflight` once elected | `endpoints`, `hosts`, `etcd`, `s3`, `ssh_key_path`, `serve.listen` |
+| `control`  | master | HTTP JSON API in front of etcd + S3 (enqueue / list / state / output) | `endpoints` (for `/v1/endpoints`), `etcd`, `s3`, `control.listen`, `serve.listen` (port only, to reach the leader) |
+| `web`      | master | Read-only dashboard (no external assets), polls `control` over HTTP | `web.api`, `web.listen` |
 | `prom`     | master | Prometheus `/metrics` (queue depth, oldest age, endpoint count) | `etcd`, `endpoints`, `prom.listen` |
 | `wrap`     | worker | Invoked via SSH by `serve`; reads task context from stdin, runs the script in a user+mount ns, uploads outputs to S3 | reads stdin JSON, not config |
 | `wrap_lower` | worker | Internal helper: chdir + tmpfs mount inside the new ns, then execs the script | — |
@@ -158,6 +158,7 @@ balancer work fine if you want it. Endpoints:
 - `GET /v1/tasks/<guid>/output?root=<r>` — `{result, stdout_b64, stderr_b64}`. 404 until `result.json` lands.
 - `GET /v1/tasks/<guid>/content/<name>?root=<r>` — passthrough GET of `<r>/<guid>/<name>` from S3 (e.g. `result.zstd` for molot-style produced artifacts).
 - `GET /v1/endpoints` — `{endpoints: [{host, port, user, path}]}`. Static config dump.
+- `GET /v1/tasks` items carry `host`: empty while queued, set to the worker while running. Filled in by asking the leader (`serve.listen`, resolved via the etcd election key); unavailable leader just means no `host`.
 
 `?root=` is **mandatory** for the state/output/content endpoints. It's the
 S3 key prefix the task wrote under; without it `control` would have to read
@@ -171,7 +172,7 @@ gorn web --config /etc/gorn/config.json
 ```
 
 HTML at `web.listen`. The main page renders the queue from `/v1/tasks`; the
-`/endpoints` page renders workers from `/v1/endpoints`. Both refresh every 2s.
+`/endpoints` page renders workers from `/v1/endpoints`. The queue page repolls every 2s through its own `/api/tasks` proxy and patches the table in place; the endpoints page is static config and is not repolled.
 Read-only; talks to `control` over HTTP (`web.api`), never to etcd or S3
 directly.
 
@@ -229,6 +230,7 @@ for a starting point and the table below for the full schema.
   "ssh_key_path": "/etc/gorn/ssh_key", // private key the daemon uses for SSH; per-endpoint ssh_key overrides
 
   "control": { "listen": "127.0.0.1:7878" },
+  "serve":   { "listen": "0.0.0.0:7879" },  // leader's /v1/inflight; reachable from control's host
   "web":     { "api": "http://127.0.0.1:7878", "listen": "127.0.0.1:7979" },
   "prom":    { "listen": "127.0.0.1:7280" }
 }

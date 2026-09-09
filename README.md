@@ -41,7 +41,7 @@ Designed for a homelab: three nodes run the daemon, one is elected leader via et
 ```
 gorn serve   --config path                                             # daemon, runs on every HA node; elects leader, dispatches
 gorn control --config path                                             # HTTP JSON RPC in front of etcd + S3; used by ignite/web
-gorn web     --config path                                             # Bootstrap queue + endpoints pages over the control API (read-only)
+gorn web     --config path                                             # queue + endpoints pages over the control API (read-only)
 gorn wrap                                                              # invoked on workers via ssh, reads stdin JSON
 gorn ignite  --api URL [--guid G] [--env K=V ...] [--wait] -- cmd args...
 ```
@@ -53,10 +53,14 @@ gorn ignite  --api URL [--guid G] [--env K=V ...] [--wait] -- cmd args...
 `control` listens on `control.listen` and speaks JSON.
 
 - `POST /v1/tasks` with body `{"guid": "...", "cmd": [...], "env": {...}}`. `guid` is optional — the server generates a UUIDv4 if missing. Server stamps `enqueued_at` (RFC3339Nano UTC) into the Task payload. Returns `{"guid": "..."}` on 200, or 409 if the GUID is already queued.
-- `GET /v1/tasks` → `{"tasks": [{"guid", "cmd", "env", "enqueued_at", "create_revision"}, ...]}`. All items currently in the etcd queue, ordered by create_revision (FIFO).
+- `GET /v1/tasks` → `{"tasks": [{"guid", "cmd", "env", "host", "enqueued_at", "create_revision"}, ...]}`. All items currently in the etcd queue, ordered by create_revision (FIFO). A task keeps its queue entry while it runs, so `host` is what separates the two states: empty means waiting, set means running on that worker. The assignment lives in the leader's memory, so `control` resolves the leader through etcd and asks it (see `serve.listen`); if the leader is unreachable or there is none, `host` is simply absent and the rest of the listing still serves.
 - `GET /v1/tasks/<guid>` → `{"guid": "...", "state": "queued" | "done" | "not_found"}`. `queued` means the etcd key still exists (waiting or retrying); `done` means the key is gone and `result.json` is in S3; `not_found` means neither.
 - `GET /v1/tasks/<guid>/output` → `{"result": {...}, "stdout_b64": "...", "stderr_b64": "..."}` on 200, or 404 if `result.json` is not yet in S3. `result` is the parsed `result.json`; `stdout_b64` / `stderr_b64` are base64-encoded full streams (never truncated).
 - `GET /v1/endpoints` → `{"endpoints": [{"host", "port", "user", "path"}, ...]}`. Raw endpoint list from config (ssh_key and log_path stripped).
+
+`serve` exposes one handle of its own on `serve.listen`, and only once it has won the election:
+
+- `GET /v1/inflight` → `{"inflight": {"<guid>": "<host>"}}`. What this leader is dispatching right now. Consumed by `control`, not meant for direct use.
 
 Since enqueue is a compare-revision-zero etcd txn, any `control` instance can serve `POST /v1/tasks` — leadership is not required.
 
@@ -81,6 +85,7 @@ Fields:
 - `etcd.endpoints[]`: etcd cluster URLs. Accepts `host:port` or `scheme://host:port` — the etcd v3 client handles both.
 - `s3`: `{endpoint, region, bucket, access_key, secret_key, use_path_style}`. `endpoint` empty means AWS default. `use_path_style=true` for MinIO.
 - `control.listen`: address for `gorn control` to bind its HTTP JSON RPC, e.g. `"127.0.0.1:7878"`. Required only for `control`; `serve` ignores it.
+- `serve.listen`: address for the leader's `/v1/inflight` handle, e.g. `"0.0.0.0:7879"`. The same config runs on every host, so `control` needs only the leader hostname (from the etcd election key) plus this port. Unset disables the lookup: everything works, tasks just never report a `host`.
 - `web.api` / `web.listen`: control URL and bind address for `gorn web`. The queue is at `/`; workers are at `/endpoints`. Required only for `web`.
 - `ssh_key_path`: private key the daemon uses to connect to endpoints. Optional if every endpoint provides its own `ssh_key`.
 

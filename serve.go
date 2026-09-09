@@ -4,10 +4,53 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 )
+
+// serveInflight exposes what this process is running right now. It starts
+// only after the campaign is won, so a reachable handle is by construction
+// the leader's. Returns a shutdown func; a listen failure is logged rather
+// than fatal — losing the view must not take the dispatcher down with it.
+func serveInflight(addr string, disp *Dispatcher) func() {
+	if addr == "" {
+		return func() {}
+	}
+
+	mux := http.NewServeMux()
+
+	mux.HandleFunc("/v1/inflight", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			httpError(w, http.StatusMethodNotAllowed, "method not allowed")
+
+			return
+		}
+
+		httpJSON(w, http.StatusOK, InflightResp{Inflight: disp.Inflight()})
+	})
+
+	srv := &http.Server{Addr: addr, Handler: mux}
+
+	go func() {
+		fmt.Fprintln(os.Stderr, "serve: inflight handle on", addr)
+
+		err := srv.ListenAndServe()
+
+		if err != nil && err != http.ErrServerClosed {
+			fmt.Fprintln(os.Stderr, "serve: inflight handle stopped:", err)
+		}
+	}()
+
+	return func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		_ = srv.Shutdown(ctx)
+	}
+}
 
 func serveMain(args []string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
@@ -83,6 +126,10 @@ func serveMain(args []string) {
 	}()
 
 	disp := NewDispatcher(cli, leader, cfg, keyFiles)
+
+	stopInflight := serveInflight(cfg.Serve.Listen, disp)
+	defer stopInflight()
+
 	disp.Run(ctx)
 
 	leader.Resign(context.Background())

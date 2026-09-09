@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"strings"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.etcd.io/etcd/client/v3/concurrency"
@@ -41,4 +42,27 @@ func (l *Leader) ID() string {
 func (l *Leader) Resign(ctx context.Context) {
 	_ = l.election.Resign(ctx)
 	_ = l.session.Close()
+}
+
+// leaderHost returns the hostname of the current leader, taken from the
+// election key with the oldest CreateRevision — the same key concurrency.
+// Election.Leader() resolves, read directly so callers need no session of
+// their own. The value is the campaign id, "<hostname>/<pid>"; only the
+// host part is of interest, since every host serves on the same port.
+func leaderHost(ctx context.Context, cli *clientv3.Client) (string, bool) {
+	resp := Throw2(cli.Get(ctx, leaderElectionPrefix,
+		clientv3.WithFirstCreate()...))
+
+	if len(resp.Kvs) == 0 {
+		return "", false
+	}
+
+	id := string(resp.Kvs[0].Value)
+	host, _, _ := strings.Cut(id, "/")
+
+	if host == "" {
+		return "", false
+	}
+
+	return host, true
 }

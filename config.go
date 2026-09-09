@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"net"
 	"os"
 	"regexp"
 	"strings"
@@ -49,6 +50,30 @@ type ControlConfig struct {
 	Listen string `json:"listen"`
 }
 
+// ServeConfig.Listen is where the leader answers GET /v1/inflight. Every
+// host runs the same config, so control needs only the leader's hostname
+// from etcd plus this port to reach it.
+type ServeConfig struct {
+	Listen string `json:"listen"`
+}
+
+// listenPort extracts the port from a listen address (":8027",
+// "0.0.0.0:8027"), which is the half of it that survives being pointed at
+// another host. Returns "" for an empty or portless address.
+func listenPort(addr string) string {
+	if addr == "" {
+		return ""
+	}
+
+	_, port, err := net.SplitHostPort(addr)
+
+	if err != nil {
+		return ""
+	}
+
+	return port
+}
+
 type WebConfig struct {
 	API    string `json:"api"`
 	Listen string `json:"listen"`
@@ -78,6 +103,7 @@ type Config struct {
 	Etcd           EtcdConfig            `json:"etcd"`
 	S3             S3Config              `json:"s3"`
 	Control        ControlConfig         `json:"control,omitempty"`
+	Serve          ServeConfig           `json:"serve,omitempty"`
 	Web            WebConfig             `json:"web,omitempty"`
 	Prom           PromConfig            `json:"prom,omitempty"`
 	SSHKeyPath     string                `json:"ssh_key_path"`

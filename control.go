@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -56,12 +57,20 @@ type EndpointsResp struct {
 }
 
 type TaskListItem struct {
-	GUID           string            `json:"guid"`
-	Env            map[string]string `json:"env,omitempty"`
-	Descr          string            `json:"descr,omitempty"`
-	Slots          int               `json:"slots,omitempty"`
-	EnqueuedAt     string            `json:"enqueued_at,omitempty"`
-	CreateRevision int64             `json:"create_revision"`
+	GUID string            `json:"guid"`
+	Env  map[string]string `json:"env,omitempty"`
+	// Host is the worker the task is running on, empty while it waits.
+	// A task stays in the queue for its whole life, so this field is what
+	// separates running from waiting.
+	Host           string `json:"host,omitempty"`
+	Descr          string `json:"descr,omitempty"`
+	Slots          int    `json:"slots,omitempty"`
+	EnqueuedAt     string `json:"enqueued_at,omitempty"`
+	CreateRevision int64  `json:"create_revision"`
+}
+
+type InflightResp struct {
+	Inflight map[string]string `json:"inflight"`
 }
 
 type TaskListResp struct {
@@ -108,7 +117,15 @@ func controlMain(args []string) {
 		endpoints[i] = EndpointInfo{Host: ep.Host, Port: ep.Port, User: ep.User, Path: ep.Path}
 	}
 
-	srv := &controlServer{etcd: cli, s3: s3cli, bucket: cfg.S3.Bucket, endpoints: endpoints, maxHostSlots: maxHostSlots(cfg.Endpoints)}
+	srv := &controlServer{
+		etcd:         cli,
+		s3:           s3cli,
+		bucket:       cfg.S3.Bucket,
+		endpoints:    endpoints,
+		servePort:    listenPort(cfg.Serve.Listen),
+		http:         &http.Client{Timeout: 2 * time.Second},
+		maxHostSlots: maxHostSlots(cfg.Endpoints),
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/tasks", srv.handleTasks)
@@ -143,10 +160,15 @@ func controlMain(args []string) {
 }
 
 type controlServer struct {
-	etcd         *clientv3.Client
-	s3           *s3.Client
-	bucket       string
-	endpoints    []EndpointInfo
+	etcd      *clientv3.Client
+	s3        *s3.Client
+	bucket    string
+	endpoints []EndpointInfo
+	// servePort is where every host answers /v1/inflight; combined with the
+	// leader hostname from etcd it addresses the one process that knows the
+	// assignments. Empty disables the lookup and leaves Host unset.
+	servePort    string
+	http         *http.Client
 	maxHostSlots int
 }
 
@@ -215,12 +237,14 @@ func (s *controlServer) handleEndpoints(w http.ResponseWriter, r *http.Request) 
 
 func (s *controlServer) listTasks(w http.ResponseWriter, r *http.Request) {
 	items := queueList(r.Context(), s.etcd)
+	inflight := s.inflight(r.Context())
 	out := make([]TaskListItem, len(items))
 
 	for i, it := range items {
 		out[i] = TaskListItem{
 			GUID:           it.Task.GUID,
 			Env:            it.Task.Env,
+			Host:           inflight[it.Task.GUID],
 			Descr:          it.Task.Descr,
 			Slots:          it.Task.Slots,
 			EnqueuedAt:     it.Task.EnqueuedAt,
@@ -229,6 +253,51 @@ func (s *controlServer) listTasks(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httpJSON(w, http.StatusOK, TaskListResp{Tasks: out})
+}
+
+// inflight asks the current leader what it is running. The assignment lives
+// in the leader's memory only, so control resolves it through etcd (whoever
+// holds the election key) and calls that host's handle on the shared port.
+// Failure degrades to an empty map: the queue is still worth serving without
+// the running/waiting distinction, so a leaderless moment or an unreachable
+// leader must not fail the whole listing.
+func (s *controlServer) inflight(ctx context.Context) map[string]string {
+	if s.servePort == "" {
+		return nil
+	}
+
+	var out map[string]string
+
+	exc := Try(func() {
+		host, ok := leaderHost(ctx, s.etcd)
+
+		if !ok {
+			return
+		}
+
+		url := "http://" + net.JoinHostPort(host, s.servePort) + "/v1/inflight"
+		req := Throw2(http.NewRequestWithContext(ctx, http.MethodGet, url, nil))
+		resp := Throw2(s.http.Do(req))
+
+		defer resp.Body.Close()
+
+		body := Throw2(io.ReadAll(resp.Body))
+
+		if resp.StatusCode != http.StatusOK {
+			ThrowFmt("inflight: %s: HTTP %d: %s", url, resp.StatusCode, strings.TrimSpace(string(body)))
+		}
+
+		var parsed InflightResp
+		Throw(json.Unmarshal(body, &parsed))
+
+		out = parsed.Inflight
+	})
+
+	exc.Catch(func(e *Exception) {
+		fmt.Fprintln(os.Stderr, "control: inflight unavailable:", e)
+	})
+
+	return out
 }
 
 func (s *controlServer) enqueue(w http.ResponseWriter, r *http.Request) {

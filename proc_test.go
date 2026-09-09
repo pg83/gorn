@@ -27,3 +27,38 @@ func TestParseStatusUID_Missing(t *testing.T) {
 		t.Fatal("expected error when Uid: line missing")
 	}
 }
+
+func TestListenPortTakesPortFromAddr(t *testing.T) {
+	cases := map[string]string{
+		"0.0.0.0:7879":   "7879",
+		":7879":          "7879",
+		"127.0.0.1:7879": "7879",
+		"":               "",
+		"7879":           "",
+	}
+
+	for addr, want := range cases {
+		if got := listenPort(addr); got != want {
+			t.Errorf("listenPort(%q) = %q, want %q", addr, got, want)
+		}
+	}
+}
+
+func TestDispatcherInflightIsACopy(t *testing.T) {
+	d := &Dispatcher{inflight: map[string]string{"guid-1": "worker-1"}}
+
+	got := d.Inflight()
+
+	if got["guid-1"] != "worker-1" {
+		t.Fatalf("Inflight() = %v, want guid-1 on worker-1", got)
+	}
+
+	// Mutating the snapshot must not reach into the dispatcher's own map,
+	// which the dispatch loop keeps writing under its mutex.
+	got["guid-1"] = "tampered"
+	delete(got, "guid-1")
+
+	if d.inflight["guid-1"] != "worker-1" {
+		t.Errorf("Inflight() handed out the live map: %v", d.inflight)
+	}
+}
