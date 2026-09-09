@@ -94,6 +94,15 @@ func serveMain(args []string) {
 	defer cli.Close()
 
 	host := Throw2(os.Hostname())
+
+	// control reaches the leader at the address it serves on, and finds it
+	// by reading the election value. So when serve.listen names a concrete
+	// address, that address is the identity to campaign with — the kernel
+	// hostname need not resolve on the network peers actually use.
+	if h := listenHost(cfg.Serve.Listen); h != "" {
+		host = h
+	}
+
 	id := fmt.Sprintf("%s/%d", host, os.Getpid())
 
 	ctx, cancel := context.WithCancel(context.Background())

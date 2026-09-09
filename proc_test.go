@@ -62,3 +62,20 @@ func TestDispatcherInflightIsACopy(t *testing.T) {
 		t.Errorf("Inflight() handed out the live map: %v", d.inflight)
 	}
 }
+
+func TestListenHostOnlyWhenConcrete(t *testing.T) {
+	cases := map[string]string{
+		"192.168.103.16:8029": "192.168.103.16",
+		"lab1:8029":           "lab1",
+		"0.0.0.0:8029":        "",
+		":8029":               "",
+		"[::]:8029":           "",
+		"":                    "",
+	}
+
+	for addr, want := range cases {
+		if got := listenHost(addr); got != want {
+			t.Errorf("listenHost(%q) = %q, want %q", addr, got, want)
+		}
+	}
+}

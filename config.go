@@ -57,6 +57,28 @@ type ServeConfig struct {
 	Listen string `json:"listen"`
 }
 
+// listenHost extracts the host from a listen address, but only when it
+// names one — a wildcard bind says nothing about how peers reach it.
+// Returns "" for empty, portless, or wildcard addresses.
+func listenHost(addr string) string {
+	if addr == "" {
+		return ""
+	}
+
+	host, _, err := net.SplitHostPort(addr)
+
+	if err != nil {
+		return ""
+	}
+
+	switch host {
+	case "", "0.0.0.0", "::", "[::]":
+		return ""
+	}
+
+	return host
+}
+
 // listenPort extracts the port from a listen address (":8027",
 // "0.0.0.0:8027"), which is the half of it that survives being pointed at
 // another host. Returns "" for an empty or portless address.
