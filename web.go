@@ -89,7 +89,6 @@ type pageData struct {
 	Tasks     []taskRow
 	Running   int
 	Waiting   int
-	Oldest    string
 	API       string
 	Error     string
 	Now       string
@@ -131,9 +130,13 @@ body { margin: 0; background: var(--plane); color: var(--ink); font: 15px/1.55 v
 .meta { margin-left: auto; font: 11.5px var(--mono); color: var(--muted); display: inline-flex; align-items: center; gap: 6px; }
 .pulse { width: 6px; height: 6px; border-radius: 50%; background: var(--good); }
 .pulse.stale { background: var(--critical); }
-.stats { display: flex; gap: 26px; flex-wrap: wrap; margin-bottom: 18px; }
-.stat .k { font: 11px var(--sans); letter-spacing: .07em; text-transform: uppercase; color: var(--muted); }
-.stat .v { font-size: 26px; font-weight: 650; letter-spacing: -0.02em; line-height: 1.2; font-variant-numeric: tabular-nums; }
+.badges { display: inline-flex; gap: 6px; align-items: center; }
+.badge { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; color: var(--ink-2);
+         border: 1px solid var(--border); border-radius: 999px; padding: 2px 10px; white-space: nowrap; }
+.badge b { font-weight: 650; font-variant-numeric: tabular-nums; color: var(--ink); }
+.badge.run { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
+.badge.run b { color: var(--accent); }
+.badge .rd { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); flex: none; }
 .wrap { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
 th { text-align: left; font: 600 11px var(--sans); letter-spacing: .07em; text-transform: uppercase; color: var(--muted);
@@ -164,17 +167,18 @@ tr.running td:first-child { box-shadow: inset 2px 0 0 var(--accent); }
       <a href="/" class="{{if eq .Page "queue"}}on{{end}}">Queue</a>
       <a href="/endpoints" class="{{if eq .Page "endpoints"}}on{{end}}">Endpoints</a>
     </nav>
+{{if eq .Page "queue"}}
+    <span class="badges">
+      <span class="badge run"><span class="rd"></span><b id="n-run">{{.Running}}</b> running</span>
+      <span class="badge"><b id="n-wait">{{.Waiting}}</b> waiting</span>
+    </span>
+{{end}}
     <span class="meta"><span class="pulse" id="pulse"></span><span id="stamp">{{.Now}}</span> · api {{.API}}</span>
   </div>
 
   {{if .Error}}<div class="err"><code>{{.Error}}</code></div>{{end}}
 
   {{if eq .Page "queue"}}
-  <div class="stats">
-    <div class="stat"><div class="k">running</div><div class="v" id="n-run">{{.Running}}</div></div>
-    <div class="stat"><div class="k">waiting</div><div class="v" id="n-wait">{{.Waiting}}</div></div>
-    <div class="stat"><div class="k">oldest</div><div class="v" id="n-old">{{.Oldest}}</div></div>
-  </div>
   <div class="wrap">
   <table>
     <thead><tr>
@@ -238,7 +242,6 @@ tr.running td:first-child { box-shadow: inset 2px 0 0 var(--accent); }
 
   function tick() {
     var now = Date.now();
-    var oldest = -1;
     var cells = rows.querySelectorAll('.age');
     for (var i = 0; i < cells.length; i++) {
       var at = Date.parse(cells[i].getAttribute('data-at'));
@@ -247,10 +250,7 @@ tr.running td:first-child { box-shadow: inset 2px 0 0 var(--accent); }
       cells[i].textContent = fmtAge(d);
       var running = cells[i].parentNode.classList.contains('running');
       cells[i].classList.toggle('old', !running && d > 60000);
-      if (!running && d > oldest) oldest = d;
     }
-    var el = document.getElementById('n-old');
-    if (el) el.textContent = oldest < 0 ? '-' : fmtAge(oldest);
   }
 
   function cell(cls, text) {
@@ -344,14 +344,12 @@ func (s *webServer) handleIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	data := pageData{Page: "queue", API: s.api, Now: time.Now().UTC().Format(time.RFC3339), Oldest: "-"}
+	data := pageData{Page: "queue", API: s.api, Now: time.Now().UTC().Format(time.RFC3339)}
 
 	exc := Try(func() {
 		tasks := s.tasks(r.Context())
 		now := time.Now().UTC()
 		data.Tasks = make([]taskRow, len(tasks))
-
-		oldest := time.Duration(-1)
 
 		for i, t := range tasks {
 			slots := t.Slots
@@ -376,14 +374,6 @@ func (s *webServer) handleIndex(w http.ResponseWriter, r *http.Request) {
 			}
 
 			data.Waiting++
-
-			if d := waitedFor(now, t.EnqueuedAt); d > oldest {
-				oldest = d
-			}
-		}
-
-		if oldest >= 0 {
-			data.Oldest = oldest.Truncate(time.Second).String()
 		}
 	})
 
@@ -517,22 +507,6 @@ func (s *webServer) tryGetJSON(ctx context.Context, path string, out any) (bool,
 	}
 
 	return true, nil
-}
-
-// waitedFor is how long the task has been in the queue, or -1 when the
-// timestamp is missing or unparsable.
-func waitedFor(now time.Time, enqueuedAt string) time.Duration {
-	if enqueuedAt == "" {
-		return -1
-	}
-
-	ts, err := time.Parse(time.RFC3339Nano, enqueuedAt)
-
-	if err != nil {
-		return -1
-	}
-
-	return now.Sub(ts)
 }
 
 func taskAge(now time.Time, enqueuedAt string) string {
