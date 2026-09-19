@@ -89,146 +89,155 @@ type pageData struct {
 	Tasks     []taskRow
 	Running   int
 	Waiting   int
-	API       string
 	Error     string
 	Now       string
 }
 
-var dashboardTmpl = template.Must(template.New("dashboard").Parse(`<!DOCTYPE html>
+var dashboardTmpl = template.Must(template.New("dashboard").Funcs(template.FuncMap{"clock": taskClock}).Parse(`<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
 <title>gorn {{.Page}}</title>
 <style>
-:root {
-  color-scheme: light;
-  --plane: #f9f9f7; --surface: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e;
-  --muted: #898781; --hair: #e1e0d9; --border: rgba(11,11,11,0.10);
-  --good: #0ca30c; --serious: #ec835a; --critical: #d03b3b;
-  --accent: #2a78d6; --wash: rgba(42,120,214,0.08); --runrow: rgba(42,120,214,0.045);
-  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
-  --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    color-scheme: dark;
-    --plane: #0d0d0d; --surface: #1a1a19; --ink: #fff; --ink-2: #c3c2b7;
-    --muted: #898781; --hair: #2c2c2a; --border: rgba(255,255,255,0.10);
-    --accent: #3987e5; --wash: rgba(57,135,229,0.14); --runrow: rgba(57,135,229,0.09);
-  }
-}
-* { box-sizing: border-box; }
-body { margin: 0; background: var(--plane); color: var(--ink); font: 15px/1.55 var(--sans); }
-.page { max-width: 1280px; margin: 0 auto; padding: 22px 20px 60px; }
-.head { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; margin-bottom: 18px; }
-.brand { font-size: 20px; font-weight: 700; letter-spacing: -0.02em; }
-.nav { display: flex; gap: 4px; }
-.nav a { font-size: 13.5px; text-decoration: none; color: var(--ink-2); padding: 3px 11px; border-radius: 999px; }
-.nav a:hover { background: var(--wash); }
-.nav a.on { background: var(--accent); color: #fff; font-weight: 550; }
-.meta { margin-left: auto; font: 11.5px var(--mono); color: var(--muted); display: inline-flex; align-items: center; gap: 6px; }
-.pulse { width: 6px; height: 6px; border-radius: 50%; background: var(--good); }
-.pulse.stale { background: var(--critical); }
-.badges { display: inline-flex; gap: 6px; align-items: center; }
-.badge { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; color: var(--ink-2);
-         border: 1px solid var(--border); border-radius: 999px; padding: 2px 10px; white-space: nowrap; }
-.badge b { font-weight: 650; font-variant-numeric: tabular-nums; color: var(--ink); }
-.badge.run { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
-.badge.run b { color: var(--accent); }
-.badge .rd { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); flex: none; }
-.wrap { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; overflow-x: auto; }
-table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
-th { text-align: left; font: 600 11px var(--sans); letter-spacing: .07em; text-transform: uppercase; color: var(--muted);
-     padding: 10px 12px; border-bottom: 1px solid var(--hair); white-space: nowrap; }
-td { padding: 9px 12px; border-bottom: 1px solid var(--hair); vertical-align: baseline; }
-tr:last-child td { border-bottom: 0; }
-tr.running td { background: var(--runrow); }
-tr.running td:first-child { box-shadow: inset 2px 0 0 var(--accent); }
-.guid { font: 11.5px var(--mono); color: var(--muted); word-break: break-all; }
-.descr { font: 12.5px var(--mono); color: var(--ink); white-space: pre-wrap; word-break: break-word; }
-.ts { font: 11.5px var(--mono); color: var(--muted); white-space: nowrap; }
-.num { font-variant-numeric: tabular-nums; white-space: nowrap; text-align: right; }
-.host { font: 12.5px var(--mono); display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; color: var(--accent); }
-.host .rd { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex: none; }
-.dash { color: var(--muted); }
-.old { color: var(--serious); font-weight: 600; }
-.empty { color: var(--muted); padding: 14px 12px; }
-.err { background: var(--surface); border: 1px solid color-mix(in srgb, var(--critical) 45%, transparent);
-       border-left: 3px solid var(--critical); border-radius: 8px; padding: 11px 14px; margin-bottom: 16px; }
-.err code { font: 12px var(--mono); color: var(--critical); word-break: break-all; }
+:root{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;--bg:#f9f9f7;--rail:#f0f0ed;--text:#0b0b0b;--muted:#898781;--dim:#a4a29b;--line:#e1e0d9;--accent:#2a78d6;--rule:#d9d8d1;--runrow:rgba(42,120,214,.035);--hover:rgba(11,11,11,.025);--host:#52514e;--good:#0ca30c;--mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;color:var(--text);background:var(--bg);font-synthesis:none;color-scheme:light}
+@media(prefers-color-scheme:dark){:root{--bg:#0d0d0d;--rail:#161615;--text:#f0f0ed;--muted:#898781;--dim:#5e5d57;--line:#242423;--accent:#3987e5;--rule:#2c2c2a;--runrow:rgba(57,135,229,.045);--hover:rgba(255,255,255,.025);--host:#c3c2b7;color-scheme:dark}}
+*{box-sizing:border-box}
+body{margin:0;display:flex;height:100dvh;overflow:hidden}
+button,a{-webkit-tap-highlight-color:transparent}
+button{font:inherit;cursor:pointer;color:inherit}
+button:focus-visible,a:focus-visible{outline:1px solid var(--accent);outline-offset:4px}
+button{border:0;background:none}
+.sidebar{width:152px;flex:0 0 152px;display:flex;flex-direction:column;align-items:stretch;padding:24px 16px;background:var(--rail);gap:28px;overflow-y:auto}
+.logo{display:flex;align-items:center;gap:11px;flex-shrink:0;font-size:24px;font-weight:650;letter-spacing:-1px;text-decoration:none;color:var(--text)}
+.logo-icon{display:block;position:relative;width:35px;height:35px;background:var(--accent);color:#fff;line-height:32px;text-align:center;font-weight:500;font-size:25px;letter-spacing:-1px}
+.logo-icon span{position:absolute;font-size:14px;right:3px;top:-4px}
+nav{display:flex;flex-direction:column}
+nav a{display:flex;align-items:center;gap:6px;min-height:44px;padding:12px 10px;text-align:left;text-decoration:none;border-left:2px solid transparent;font-size:12px;color:var(--muted)}
+nav a:hover{color:var(--text)}
+nav a.active{color:var(--accent);border-left-color:var(--accent)}
+.nav-count{margin-left:auto;font:10px var(--mono);color:var(--dim)}
+.active .nav-count{color:var(--accent);opacity:.65}
+.queue-state{padding:0 0 0 12px;display:flex;flex-direction:column;gap:5px}
+.filter{padding:7px 0;display:flex;align-items:center;gap:8px;font-size:11px;text-align:left;color:var(--muted)}
+.filter:hover,.filter.selected{color:var(--text)}
+.filter .count{margin-left:auto;font:11px var(--mono);font-variant-numeric:tabular-nums}
+.filter.selected .count{color:var(--accent)}
+.dot{display:inline-block;flex:none;width:5px;height:5px;border-radius:50%;background:var(--accent)}
+.dot.waiting{background:transparent;border:1px solid var(--muted)}
+.sidebar-foot{margin-top:auto;padding:0 0 0 12px;font-size:10px;line-height:1.9;color:var(--muted)}
+.sidebar-foot .snapshot{display:flex;align-items:center;gap:7px}
+.sidebar-foot .dot{background:var(--good)}
+.sidebar-foot time{display:block;padding-left:12px;font:9px/1.9 var(--mono);color:var(--dim)}
+main{flex:1;min-width:0;height:100dvh;overflow:auto;scrollbar-color:var(--rule) transparent;background:var(--bg)}
+.page{padding:26px 36px 48px;min-height:100%;min-width:720px}
+table{border-collapse:collapse;width:100%;table-layout:fixed;text-align:left}
+col.task{width:53%}col.host{width:19%}col.slots{width:7%}col.time{width:12%}col.age{width:9%}
+th{height:34px;padding:0 14px 13px;font:500 9px var(--mono);letter-spacing:1.25px;color:var(--muted);text-transform:uppercase;vertical-align:top;white-space:nowrap;border-bottom:1px solid var(--rule)}
+th:first-child{padding-left:16px}th:last-child{padding-right:16px}
+td{height:72px;padding:14px;vertical-align:middle;border-bottom:1px solid var(--line);font-size:12px}
+td:first-child{padding-left:16px}td:last-child{padding-right:16px}
+tr.running{background:var(--runrow)}tbody tr:hover{background:var(--hover)}
+.task-line{display:flex;align-items:center;gap:11px;min-width:0}
+.task-line .dot{width:5px;height:5px}
+.task-body{min-width:0}
+.task-name{white-space:pre-wrap;font:12px/1.55 var(--mono);color:var(--text);overflow-wrap:anywhere}
+.task-guid{margin-top:4px;font:10px/1.4 var(--mono);color:var(--dim);overflow-wrap:anywhere}
+.host-name{overflow-wrap:anywhere;font:12px/1.5 var(--mono);color:var(--accent)}
+.number{text-align:right;font-variant-numeric:tabular-nums}
+td.number{font:11px var(--mono);color:var(--muted)}
+.clock{font:11px var(--mono);color:var(--muted);white-space:nowrap}
+.dash{font:12px var(--mono);color:var(--dim)}
+.running .age{color:var(--text)}
+.host-col .host-name{color:var(--text)}
+.endpoint-user,.endpoint-path{font:11px/1.5 var(--mono);color:var(--muted);overflow-wrap:anywhere}
+.endpoints th:nth-child(1){width:28%}.endpoints th:nth-child(2){width:11%}.endpoints th:nth-child(3){width:19%}.endpoints th:nth-child(4){width:42%}
+.endpoints td{height:64px}
+.empty{height:130px;font:12px var(--mono);color:var(--muted);text-align:center}
+[hidden]{display:none!important}
+@media(min-width:1700px){col.task{width:57%}col.host{width:17%}col.slots{width:6%}col.time{width:11%}col.age{width:9%}.page{padding-left:44px;padding-right:44px}}
+@media(max-width:1000px){.page{padding-left:22px;padding-right:22px}col.task{width:47%}col.host{width:20%}col.slots{width:8%}col.time{width:14%}col.age{width:11%}.task-name{font-size:11px}td{padding-left:10px;padding-right:10px}}
+@media(max-width:680px){.sidebar{width:124px;flex-basis:124px;padding:20px 12px;gap:25px}.logo{font-size:21px;gap:8px}.logo-icon{width:30px;height:30px;line-height:28px;font-size:22px}.page{padding:22px 16px 40px;min-width:680px}.queue-state,.sidebar-foot{padding-left:12px}}
+
+.sidebar-foot .dot.stale{background:#d03b3b}
+.number.old{color:#ec835a}
+.error{border-left:2px solid #d03b3b;padding:10px 14px;margin:0 0 18px;color:#d03b3b;font:12px/1.6 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere}
 </style>
 </head>
 <body>
-<div class="page">
-  <div class="head">
-    <span class="brand">gorn</span>
-    <nav class="nav">
-      <a href="/" class="{{if eq .Page "queue"}}on{{end}}">Queue</a>
-      <a href="/endpoints" class="{{if eq .Page "endpoints"}}on{{end}}">Endpoints</a>
-    </nav>
-{{if eq .Page "queue"}}
-    <span class="badges">
-      <span class="badge run"><span class="rd"></span><b id="n-run">{{.Running}}</b> running</span>
-      <span class="badge"><b id="n-wait">{{.Waiting}}</b> waiting</span>
-    </span>
-{{end}}
-    <span class="meta"><span class="pulse" id="pulse"></span><span id="stamp">{{.Now}}</span> · api {{.API}}</span>
-  </div>
-
-  {{if .Error}}<div class="err"><code>{{.Error}}</code></div>{{end}}
-
+<aside class="sidebar" aria-label="Navigation">
+  <a class="logo" href="/" aria-label="Gorn queue"><span class="logo-icon" aria-hidden="true">g<span>↗</span></span>gorn</a>
+  <nav aria-label="Views">
+    <a href="/"{{if eq .Page "queue"}} class="active" aria-current="page"{{end}}>Queue{{if eq .Page "queue"}} <span class="nav-count" id="queue-count">{{len .Tasks}}</span>{{end}}</a>
+    <a href="/endpoints"{{if eq .Page "endpoints"}} class="active" aria-current="page"{{end}}>Endpoints</a>
+  </nav>
   {{if eq .Page "queue"}}
-  <div class="wrap">
-  <table>
-    <thead><tr>
-      <th style="width:46%">task</th><th>host</th><th class="num">slots</th><th>enqueued</th><th class="num">age</th>
-    </tr></thead>
+  <div class="queue-state" aria-label="Filter tasks">
+    <button class="filter" data-filter="running" aria-pressed="false"><span class="dot" aria-hidden="true"></span>Running<span class="count" id="n-run">{{.Running}}</span></button>
+    <button class="filter" data-filter="waiting" aria-pressed="false"><span class="dot waiting" aria-hidden="true"></span>Waiting<span class="count" id="n-wait">{{.Waiting}}</span></button>
+  </div>
+  {{end}}
+  <div class="sidebar-foot">
+    <span class="snapshot"><span class="dot{{if .Error}} stale{{end}}" id="pulse" aria-hidden="true"></span><span id="connection" role="status">{{if .Error}}Unavailable{{else if eq .Page "queue"}}Live{{else}}Snapshot{{end}}</span></span>
+    <time id="stamp" datetime="{{.Now}}" title="{{.Now}}">{{clock .Now}} UTC</time>
+  </div>
+</aside>
+<main>
+<section class="page" aria-label="{{.Page}}">
+  <div class="error" id="error" role="alert"{{if not .Error}} hidden{{end}}>{{.Error}}</div>
+  {{if eq .Page "queue"}}
+  <table aria-label="Task queue">
+    <colgroup><col class="task"><col class="host"><col class="slots"><col class="time"><col class="age"></colgroup>
+    <thead><tr><th scope="col">Task</th><th scope="col">Host</th><th scope="col" class="number">Slots</th><th scope="col" class="number">Enqueued</th><th scope="col" class="number">Age</th></tr></thead>
     <tbody id="rows">
     {{range .Tasks}}
-      <tr{{if .Host}} class="running"{{end}}>
-        <td><div class="descr">{{.Descr}}</div><div class="guid">{{.GUID}}</div></td>
-        <td>{{if .Host}}<span class="host"><span class="rd"></span>{{.Host}}</span>{{else}}<span class="dash">&mdash;</span>{{end}}</td>
-        <td class="num">{{.Slots}}</td>
-        <td class="ts">{{.EnqueuedAt}}</td>
-        <td class="num age" data-at="{{.EnqueuedAt}}">{{.Age}}</td>
+      <tr class="{{if .Host}}running{{else}}waiting{{end}}" data-task>
+        <td><div class="task-line"><span class="dot{{if not .Host}} waiting{{end}}" title="{{if .Host}}Running{{else}}Waiting{{end}}"></span><div class="task-body"><div class="task-name">{{.Descr}}</div><div class="task-guid">{{.GUID}}</div></div></div></td>
+        <td>{{if .Host}}<span class="host-name">{{.Host}}</span>{{else}}<span class="dash">—</span>{{end}}</td>
+        <td class="number">{{.Slots}}</td>
+        <td class="number"><time class="clock" datetime="{{.EnqueuedAt}}" title="{{.EnqueuedAt}}">{{clock .EnqueuedAt}}</time></td>
+        <td class="number age" data-at="{{.EnqueuedAt}}">{{.Age}}</td>
       </tr>
-    {{else}}
-      <tr><td colspan="5" class="empty">queue is empty</td></tr>
     {{end}}
+      <tr id="empty-row"{{if .Tasks}} hidden{{end}}><td colspan="5" class="empty">queue is empty</td></tr>
     </tbody>
   </table>
-  </div>
   {{else}}
-  <div class="wrap">
-  <table>
-    <thead><tr><th style="width:28%">host</th><th class="num">port</th><th>user</th><th>path</th></tr></thead>
+  <table class="endpoints" aria-label="Worker endpoints">
+    <thead><tr><th scope="col">Host</th><th scope="col" class="number">Port</th><th scope="col">User</th><th scope="col">Path</th></tr></thead>
     <tbody>
     {{range .Endpoints}}
       <tr>
-        <td class="descr">{{.Host}}</td>
-        <td class="num">{{if .Port}}{{.Port}}{{else}}22{{end}}</td>
-        <td class="descr">{{.User}}</td>
-        <td class="guid">{{.Path}}</td>
+        <td class="host-col"><span class="host-name">{{.Host}}</span></td>
+        <td class="number">{{if .Port}}{{.Port}}{{else}}22{{end}}</td>
+        <td class="endpoint-user">{{.User}}</td>
+        <td class="endpoint-path">{{.Path}}</td>
       </tr>
     {{else}}
       <tr><td colspan="4" class="empty">no endpoints</td></tr>
     {{end}}
     </tbody>
   </table>
-  </div>
   {{end}}
-</div>
-
+</section>
+</main>
 {{if eq .Page "queue"}}
 <script>
-// Refresh by patching the table, not by reloading the document: a
-// meta-refresh drops text selection and scroll position every 2s. Ages
-// tick locally each second so the numbers stay honest between polls.
 (function () {
   var rows = document.getElementById('rows');
   var pulse = document.getElementById('pulse');
   var stamp = document.getElementById('stamp');
+  var connection = document.getElementById('connection');
+  var error = document.getElementById('error');
+  var filters = document.querySelectorAll('[data-filter]');
+  var filter = 'all';
+
+  function clock(value) {
+    var date = new Date(value);
+    if (isNaN(date.getTime())) return value;
+    return date.toLocaleTimeString('en-GB', {timeZone: 'UTC', hour12: false});
+  }
 
   function fmtAge(ms) {
     if (ms < 0) ms = 0;
@@ -242,90 +251,111 @@ tr.running td:first-child { box-shadow: inset 2px 0 0 var(--accent); }
 
   function tick() {
     var now = Date.now();
-    var cells = rows.querySelectorAll('.age');
-    for (var i = 0; i < cells.length; i++) {
-      var at = Date.parse(cells[i].getAttribute('data-at'));
-      if (isNaN(at)) continue;
-      var d = now - at;
-      cells[i].textContent = fmtAge(d);
-      var running = cells[i].parentNode.classList.contains('running');
-      cells[i].classList.toggle('old', !running && d > 60000);
-    }
+    rows.querySelectorAll('.age').forEach(function (cell) {
+      var at = Date.parse(cell.getAttribute('data-at'));
+      if (isNaN(at)) return;
+      var age = now - at;
+      cell.textContent = fmtAge(age);
+      cell.classList.toggle('old', !cell.parentNode.classList.contains('running') && age > 60000);
+    });
   }
 
-  function cell(cls, text) {
-    var td = document.createElement('td');
-    if (cls) td.className = cls;
-    td.textContent = text;
-    return td;
+  function applyFilter() {
+    var visible = 0;
+    rows.querySelectorAll('[data-task]').forEach(function (row) {
+      row.hidden = filter !== 'all' && !row.classList.contains(filter);
+      if (!row.hidden) visible++;
+    });
+    var empty = document.getElementById('empty-row');
+    empty.hidden = visible !== 0;
+    empty.firstElementChild.textContent = filter === 'all' ? 'queue is empty' : 'no ' + filter + ' tasks';
+    filters.forEach(function (button) {
+      var active = button.dataset.filter === filter;
+      button.classList.toggle('selected', active);
+      button.setAttribute('aria-pressed', String(active));
+    });
+  }
+
+  filters.forEach(function (button) {
+    button.addEventListener('click', function () {
+      filter = filter === button.dataset.filter ? 'all' : button.dataset.filter;
+      applyFilter();
+    });
+  });
+
+  function element(tag, cls, text) {
+    var node = document.createElement(tag);
+    node.className = cls;
+    if (text !== undefined) node.textContent = text;
+    return node;
   }
 
   function render(tasks) {
-    var frag = document.createDocumentFragment();
-    if (!tasks.length) {
-      var tr = document.createElement('tr');
-      var td = cell('empty', 'queue is empty');
-      td.colSpan = 5;
-      tr.appendChild(td);
-      frag.appendChild(tr);
-    }
+    var fragment = document.createDocumentFragment();
     var running = 0;
-    tasks.forEach(function (t) {
-      if (t.host) running++;
-      var tr = document.createElement('tr');
-      if (t.host) tr.className = 'running';
+    tasks.forEach(function (task) {
+      if (task.host) running++;
+      var row = element('tr', task.host ? 'running' : 'waiting');
+      row.setAttribute('data-task', '');
+      var first = element('td', '');
+      var line = element('div', 'task-line');
+      var dot = element('span', task.host ? 'dot' : 'dot waiting');
+      dot.title = task.host ? 'Running' : 'Waiting';
+      var body = element('div', 'task-body');
+      body.append(element('div', 'task-name', task.descr || ''), element('div', 'task-guid', task.guid));
+      line.append(dot, body);
+      first.appendChild(line);
+      row.appendChild(first);
 
-      var first = document.createElement('td');
-      var d = document.createElement('div');
-      d.className = 'descr';
-      d.textContent = t.descr || '';
-      var g = document.createElement('div');
-      g.className = 'guid';
-      g.textContent = t.guid;
-      first.appendChild(d);
-      first.appendChild(g);
-      tr.appendChild(first);
-
-      var h = document.createElement('td');
-      if (t.host) {
-        var span = document.createElement('span');
-        span.className = 'host';
-        var dot = document.createElement('span');
-        dot.className = 'rd';
-        span.appendChild(dot);
-        span.appendChild(document.createTextNode(t.host));
-        h.appendChild(span);
-      } else {
-        var dash = document.createElement('span');
-        dash.className = 'dash';
-        dash.textContent = '—';
-        h.appendChild(dash);
-      }
-      tr.appendChild(h);
-
-      tr.appendChild(cell('num', t.slots || 1));
-      tr.appendChild(cell('ts', t.enqueued_at || ''));
-      var age = cell('num age', '');
-      age.setAttribute('data-at', t.enqueued_at || '');
-      tr.appendChild(age);
-
-      frag.appendChild(tr);
+      var host = element('td', '');
+      host.appendChild(element('span', task.host ? 'host-name' : 'dash', task.host || '—'));
+      row.append(host, element('td', 'number', task.slots > 0 ? task.slots : 1));
+      var enqueued = element('td', 'number');
+      var time = element('time', 'clock', clock(task.enqueued_at || ''));
+      time.dateTime = task.enqueued_at || '';
+      time.title = time.dateTime;
+      enqueued.appendChild(time);
+      var age = element('td', 'number age', '');
+      age.setAttribute('data-at', time.dateTime);
+      row.append(enqueued, age);
+      fragment.appendChild(row);
     });
-    rows.replaceChildren(frag);
+    var empty = element('tr', '');
+    empty.id = 'empty-row';
+    var message = element('td', 'empty', 'queue is empty');
+    message.colSpan = 5;
+    empty.appendChild(message);
+    fragment.appendChild(empty);
+    rows.replaceChildren(fragment);
+    document.getElementById('queue-count').textContent = tasks.length;
     document.getElementById('n-run').textContent = running;
     document.getElementById('n-wait').textContent = tasks.length - running;
+    applyFilter();
     tick();
   }
 
   function poll() {
     fetch('/api/tasks', {cache: 'no-store'})
-      .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
-      .then(function (data) {
-        pulse.classList.remove('stale');
-        stamp.textContent = new Date().toISOString().replace(/\.\d+Z$/, 'Z');
-        render(data.tasks || []);
+      .then(function (response) {
+        if (response.ok) return response.json();
+        return response.text().then(function (body) { throw new Error('HTTP ' + response.status + ': ' + body); });
       })
-      .catch(function () { pulse.classList.add('stale'); });
+      .then(function (data) {
+        render(data.tasks || []);
+        pulse.classList.remove('stale');
+        connection.textContent = 'Live';
+        stamp.dateTime = new Date().toISOString();
+        stamp.title = stamp.dateTime;
+        stamp.textContent = clock(stamp.dateTime) + ' UTC';
+        error.hidden = true;
+        error.textContent = '';
+      })
+      .catch(function (failure) {
+        pulse.classList.add('stale');
+        connection.textContent = 'Unavailable';
+        error.textContent = String(failure);
+        error.hidden = false;
+      });
   }
 
   setInterval(tick, 1000);
@@ -335,7 +365,8 @@ tr.running td:first-child { box-shadow: inset 2px 0 0 var(--accent); }
 </script>
 {{end}}
 </body>
-</html>`))
+</html>
+`))
 
 func (s *webServer) handleIndex(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/" {
@@ -344,7 +375,7 @@ func (s *webServer) handleIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	data := pageData{Page: "queue", API: s.api, Now: time.Now().UTC().Format(time.RFC3339)}
+	data := pageData{Page: "queue", Now: time.Now().UTC().Format(time.RFC3339)}
 
 	exc := Try(func() {
 		tasks := s.tasks(r.Context())
@@ -428,7 +459,7 @@ func (s *webServer) handleEndpoints(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	data := pageData{Page: "endpoints", API: s.api, Now: time.Now().UTC().Format(time.RFC3339)}
+	data := pageData{Page: "endpoints", Now: time.Now().UTC().Format(time.RFC3339)}
 
 	exc := Try(func() {
 		var eps EndpointsResp
@@ -521,4 +552,14 @@ func taskAge(now time.Time, enqueuedAt string) string {
 	}
 
 	return now.Sub(ts).Truncate(time.Second).String()
+}
+
+func taskClock(timestamp string) string {
+	t, err := time.Parse(time.RFC3339Nano, timestamp)
+
+	if err != nil {
+		return timestamp
+	}
+
+	return t.UTC().Format("15:04:05")
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"html"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -18,8 +19,9 @@ func TestWebQueuePageOnlyFetchesAndRendersQueue(t *testing.T) {
 		case "/v1/tasks":
 			taskCalls.Add(1)
 			Throw(json.NewEncoder(w).Encode(TaskListResp{Tasks: []TaskListItem{{
-				GUID:  "task-1",
-				Descr: "test task",
+				GUID:       "task-1",
+				Descr:      "test task & its inputs",
+				EnqueuedAt: "2026-09-19T19:43:52.123456789+03:00",
 			}}}))
 		case "/v1/endpoints":
 			endpointCalls.Add(1)
@@ -45,9 +47,15 @@ func TestWebQueuePageOnlyFetchesAndRendersQueue(t *testing.T) {
 		t.Fatalf("API calls: tasks=%d endpoints=%d, want 1/0", taskCalls.Load(), endpointCalls.Load())
 	}
 
-	for _, want := range []string{"gorn queue", "task-1", "test task", `href="/endpoints"`} {
+	for _, want := range []string{"gorn queue", "task-1", "test task &amp; its inputs", `href="/endpoints"`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("queue page does not contain %q", want)
+		}
+	}
+
+	for _, want := range []string{`datetime="2026-09-19T19:43:52.123456789+03:00"`, `title="2026-09-19T19:43:52.123456789+03:00">16:43:52</time>`} {
+		if !strings.Contains(html.UnescapeString(body), want) {
+			t.Errorf("queue page lost the original timestamp or its UTC time: %q", want)
 		}
 	}
 

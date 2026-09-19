@@ -86,7 +86,7 @@ Fields:
 - `s3`: `{endpoint, region, bucket, access_key, secret_key, use_path_style}`. `endpoint` empty means AWS default. `use_path_style=true` for MinIO.
 - `control.listen`: address for `gorn control` to bind its HTTP JSON RPC, e.g. `"127.0.0.1:7878"`. Required only for `control`; `serve` ignores it.
 - `serve.listen`: address for the leader's `/v1/inflight` handle, e.g. `"192.168.103.16:7879"`. `control` finds the leader by reading the election value and dials it on this port. Name a concrete address rather than a wildcard when peers reach each other over an overlay: `serve` then campaigns under that address instead of the kernel hostname, which need not resolve there. Unset disables the lookup: everything works, tasks just never report a `host`.
-- `web.api` / `web.listen`: control URL and bind address for `gorn web`. The queue is at `/`; workers are at `/endpoints`. Required only for `web`.
+- `web.api` / `web.listen`: control URL and bind address for `gorn web`. The queue is at `/`; workers are at `/endpoints`. Required only for `web`. Navigation, queue filters, and connection status are in the left sidebar. The queue updates every two seconds; Running / Waiting filters stay selected across updates. Enqueue times are UTC, with the full timestamp available on hover. Light and dark themes follow the browser preference.
 - `ssh_key_path`: private key the daemon uses to connect to endpoints. Optional if every endpoint provides its own `ssh_key`.
 
 ### `${VAR}` expansion
