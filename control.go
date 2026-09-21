@@ -572,9 +572,11 @@ func (s *controlServer) getInfo(w http.ResponseWriter, r *http.Request, guid str
 	}
 
 	if info.Root == "" && s.loki != nil {
+		// Newest lines first: a task someone is looking at was most
+		// likely active recently, and the scan stops at the first hit.
 		now := time.Now()
 
-		for _, line := range s.loki.taskLog(r.Context(), guid, now.Add(-logWindow), now, "forward", 50) {
+		for _, line := range s.loki.taskLog(r.Context(), guid, now.Add(-logWindow), now, "backward", 50) {
 			if line.Root != "" {
 				info.Root = line.Root
 
@@ -598,6 +600,36 @@ func (s *controlServer) getInfo(w http.ResponseWriter, r *http.Request, guid str
 	}
 
 	httpJSON(w, http.StatusOK, info)
+}
+
+// taskAnchor finds when the task's log can have begun without touching
+// Loki: the queue record's enqueued_at while the task lives, the
+// wrapper's started_at from result.json once it is done. Empty when
+// neither is known, which leaves the caller with the full window.
+func (s *controlServer) taskAnchor(ctx context.Context, guid, root string) string {
+	resp := Throw2(s.etcd.Get(ctx, queueKey(guid)))
+
+	if len(resp.Kvs) > 0 {
+		var task Task
+		Throw(json.Unmarshal(resp.Kvs[0].Value, &task))
+
+		return task.EnqueuedAt
+	}
+
+	if root == "" {
+		return ""
+	}
+
+	result := s3GetBytes(ctx, s.s3, s.bucket, resultKey(root, guid))
+
+	if result == nil {
+		return ""
+	}
+
+	var parsed WrapResult
+	Throw(json.Unmarshal(result, &parsed))
+
+	return parsed.StartedAt
 }
 
 func logLimit(r *http.Request) int {
@@ -655,7 +687,13 @@ func (s *controlServer) getLog(w http.ResponseWriter, r *http.Request, guid stri
 	direction := "backward"
 	limit := logLimit(r)
 
-	if since := r.URL.Query().Get("since"); since != "" {
+	since := r.URL.Query().Get("since")
+
+	if since == "" {
+		since = s.taskAnchor(r.Context(), guid, r.URL.Query().Get("root"))
+	}
+
+	if since != "" {
 		at, err := time.Parse(time.RFC3339Nano, since)
 
 		if err != nil {

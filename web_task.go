@@ -144,7 +144,7 @@ var taskTmpl = template.Must(template.New("task").Funcs(pageFuncs).Parse(pageHea
   function query(params) {
     var q = new URLSearchParams();
     q.set('root', root);
-    if (enqueuedAt) q.set('since', enqueuedAt);
+    if (enqueuedAt || startedAt) q.set('since', enqueuedAt || startedAt);
     Object.keys(params).forEach(function (k) { q.set(k, params[k]); });
     return '/api/tasks/' + encodeURIComponent(guid) + '/log?' + q.toString();
   }
