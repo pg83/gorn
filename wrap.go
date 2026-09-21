@@ -150,10 +150,29 @@ type wrapTaskLogWriter struct {
 
 const wrapTaskLogChunk = 64 * 1024
 
+// wrapLogRotateBytes caps the per-endpoint log: everything in it is
+// already in S3 (stdout/stderr per task) and shipped by the log
+// collector, so one previous generation is plenty.
+const wrapLogRotateBytes = 64 << 20
+
+func rotateWrapLog(path string, limit int64) {
+	info, err := os.Stat(path)
+
+	if err != nil || info.Size() <= limit {
+		return
+	}
+
+	if err := os.Rename(path, path+".1"); err != nil {
+		fmt.Fprintf(os.Stderr, "wrap: log rotate failed: path=%q err=%v\n", path, err)
+	}
+}
+
 func openWrapLog(path, guid string) *wrapLog {
 	if path == "" {
 		return &wrapLog{guid: guid}
 	}
+
+	rotateWrapLog(path, wrapLogRotateBytes)
 
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
 

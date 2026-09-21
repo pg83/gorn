@@ -102,3 +102,39 @@ func TestWrapTaskLogWriterChunksLongLines(t *testing.T) {
 		t.Fatalf("reassembled line length: got %d, want %d", len(got), len(want))
 	}
 }
+
+func TestRotateWrapLogKeepsOneGeneration(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "wrap.log")
+
+	if err := os.WriteFile(path, []byte("old\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	rotateWrapLog(path, 16)
+
+	if _, err := os.Stat(path + ".1"); !os.IsNotExist(err) {
+		t.Fatalf("small log rotated: %v", err)
+	}
+
+	if err := os.WriteFile(path, []byte(strings.Repeat("x", 17)), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	rotateWrapLog(path, 16)
+
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("large log not rotated: %v", err)
+	}
+
+	if data, err := os.ReadFile(path + ".1"); err != nil || len(data) != 17 {
+		t.Fatalf("rotated generation: %v %d", err, len(data))
+	}
+
+	log := openWrapLog(path, "task-rotate")
+	log.logf("fresh")
+	log.close()
+
+	if records, err := os.ReadFile(path); err != nil || !strings.Contains(string(records), "fresh") {
+		t.Fatalf("fresh log: %v %q", err, records)
+	}
+}
