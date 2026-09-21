@@ -11,18 +11,16 @@ import (
 
 var taskTmpl = template.Must(template.New("task").Funcs(pageFuncs).Parse(pageHead + `
 .page.task{display:flex;flex-direction:column;height:100%;min-height:0;padding-bottom:0}
-.crumbs{display:flex;align-items:center;font:11px var(--mono);color:var(--muted);margin-bottom:12px}
+.crumbs{display:block;font:11px/1.6 var(--mono);color:var(--muted);margin-bottom:2px;overflow-wrap:anywhere}
 .crumbs a{color:var(--muted);text-decoration:none}.crumbs a:hover{color:var(--text)}
 .crumbs .sep{margin:0 8px;color:var(--dim)}
-.crumbs .cur{color:var(--text);overflow-wrap:anywhere}
-.crumbs .copy{margin-left:10px;font:9px var(--mono);letter-spacing:1px;text-transform:uppercase;color:var(--dim);padding:0}
-.crumbs .copy:hover{color:var(--accent)}
-.title{display:grid;grid-template-columns:120px 1fr;gap:0 18px;align-items:start;padding-bottom:12px}
-.state{display:inline-flex;align-items:center;gap:8px;height:22px;padding:0 10px 0 9px;font:500 9px var(--mono);letter-spacing:1.25px;text-transform:uppercase;color:var(--accent);border:1px solid currentColor;border-radius:2px;white-space:nowrap}
+.crumbs .cur{color:var(--text)}
+.crumbs .comma{color:var(--dim);margin-right:8px}
+.crumbs .task-name{font:11px/1.6 var(--mono);color:var(--text)}
+.state{display:inline-flex;align-items:center;gap:8px;margin:2px 0 3px;font:500 10px var(--mono);letter-spacing:1.25px;text-transform:uppercase;color:var(--accent);white-space:nowrap}
 .state .dot{background:currentColor}
-.state.done{color:var(--good)}.state.failed{color:#d03b3b}.state.waiting,.state.not_found{color:var(--muted)}
-.title .task-name{font:12px/22px var(--mono)}
-.facts{display:grid;grid-template-columns:1fr 1fr 1.4fr;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule)}
+.state.done{color:var(--good)}.state.failed{color:#d03b3b}.state.waiting,.state.not_found,.state.loading{color:var(--muted)}
+.facts{display:grid;grid-template-columns:.9fr 1fr 1fr 1.2fr;margin-top:10px;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule)}
 .facts section{padding:9px 16px 10px 0;margin-right:16px;border-right:1px solid var(--line);min-width:0}
 .facts section:last-child{border-right:0;margin-right:0;padding-right:0}
 .facts h2{margin:0 0 6px;font:500 9px var(--mono);letter-spacing:1.25px;text-transform:uppercase;color:var(--muted)}
@@ -66,12 +64,13 @@ var taskTmpl = template.Must(template.New("task").Funcs(pageFuncs).Parse(pageHea
 <main>
 <section class="page task" aria-label="task" id="task" data-guid="{{.Task.GUID}}" data-root="{{.Task.Root}}" data-state="{{.Task.State}}" data-enqueued="{{.Task.EnqueuedAt}}">
   <div class="error" id="error" role="alert"{{if not .Error}} hidden{{end}}>{{.Error}}</div>
-  <div class="crumbs"><a href="/">Queue</a><span class="sep">/</span><span id="crumb-root">{{.Task.Root}}</span><span class="sep">/</span><span class="cur">{{.Task.GUID}}</span><button class="copy" id="copy" title="Copy GUID">copy</button></div>
-  <header class="title">
-    <span class="state {{.Task.State}}" id="state"><span class="dot" aria-hidden="true"></span><span id="state-text">{{.Task.State}}</span></span>
-    <div class="task-body"><div class="task-name" id="descr">{{.Task.Descr}}</div></div>
-  </header>
+  <div class="crumbs"><a href="/">Queue</a><span class="sep">/</span><span id="crumb-root">{{.Task.Root}}</span><span class="sep">/</span><span class="cur">{{.Task.GUID}}</span><span class="comma">,</span><span class="task-name" id="descr">{{.Task.Descr}}</span></div>
   <div class="facts" aria-label="Task facts">
+    <section>
+      <h2>State</h2>
+      <p><span class="state {{.Task.State}}" id="state"><span class="dot" aria-hidden="true"></span><span id="state-text">{{.Task.State}}</span></span></p>
+      <p id="state-detail">{{if .Task.Result}}exit {{.Task.Result.ExitCode}}{{else}}<span class="muted">—</span>{{end}}</p>
+    </section>
     <section>
       <h2>Worker</h2>
       <p id="worker">{{if .Task.User}}<span class="host-name">{{.Task.User}}</span> <span class="muted">@</span> {{.Task.Host}}{{else if .Task.Host}}{{.Task.Host}}{{else}}<span class="muted">not dispatched</span>{{end}}</p>
@@ -88,7 +87,7 @@ var taskTmpl = template.Must(template.New("task").Funcs(pageFuncs).Parse(pageHea
       <h2>Timeline</h2>
       <p><span class="k">enqueued</span><span id="enqueued">{{if .Task.EnqueuedAt}}{{clock .Task.EnqueuedAt}}{{else}}—{{end}}</span></p>
       <p><span class="k">started</span><span id="started">{{if .Task.Result}}{{clock .Task.Result.StartedAt}}{{else}}—{{end}}</span></p>
-      <p id="outcome">{{if .Task.Result}}<span class="k">finished</span>{{clock .Task.Result.FinishedAt}} <span class="sep">·</span>exit {{.Task.Result.ExitCode}}{{else}}<span class="k">running</span><span class="muted">—</span>{{end}}</p>
+      <p id="third">{{if .Task.Result}}<span class="k">finished</span>{{clock .Task.Result.FinishedAt}}{{else}}<span class="k">now</span><span class="muted">—</span>{{end}}</p>
     </section>
   </div>
   <section class="logs" aria-label="Task log">
@@ -214,14 +213,12 @@ var taskTmpl = template.Must(template.New("task").Funcs(pageFuncs).Parse(pageHea
     text('started', startedAt ? clock(startedAt) : '—');
     if (state === 'queued') {
       var since = startedAt || enqueuedAt;
-      var live = document.getElementById('outcome');
-      if (!startedAt && !page.dataset.host) {
-        live.innerHTML = '';
-        live.append(element('span', 'k', 'waiting'), element('span', 'live', since ? fmtDur(Date.now() - Date.parse(since)) : '—'), element('span', 'muted', ' in queue'));
-      } else {
-        live.innerHTML = '';
-        live.append(element('span', 'k', 'running'), element('span', 'live', since ? fmtDur(Date.now() - Date.parse(since)) : '—'), element('span', 'muted', ' so far'));
-      }
+      var detail = document.getElementById('state-detail');
+      detail.innerHTML = '';
+      detail.append(element('span', 'live', since ? fmtDur(Date.now() - Date.parse(since)) : '—'), element('span', 'muted', page.dataset.host || startedAt ? ' so far' : ' in queue'));
+      var third = document.getElementById('third');
+      third.innerHTML = '';
+      third.append(element('span', 'k', 'now'), document.createTextNode(clock(new Date().toISOString())));
     }
     var ago = updated ? Math.round((Date.now() - updated) / 1000) : 0;
     logState.textContent = state === 'queued' ? 'live, updated ' + ago + 's ago' : state === 'done' ? 'complete' : state === 'not_found' ? 'no record of this task' : 'loading';
@@ -262,7 +259,7 @@ var taskTmpl = template.Must(template.New("task").Funcs(pageFuncs).Parse(pageHea
     if (state === 'queued') label = info.host ? 'running' : 'waiting';
     if (state === 'done' && info.result && info.result.exit_code !== 0) label = 'failed';
     badge.className = 'state ' + (state === 'queued' ? (info.host ? 'running' : 'waiting') : label);
-    text('state-text', label + (state === 'done' && info.result ? ' · exit ' + info.result.exit_code : ''));
+    text('state-text', label);
     if (info.descr) text('descr', info.descr);
     var worker = document.getElementById('worker');
     worker.innerHTML = '';
@@ -289,9 +286,12 @@ var taskTmpl = template.Must(template.New("task").Funcs(pageFuncs).Parse(pageHea
     if (info.enqueued_at) { enqueuedAt = info.enqueued_at; text('enqueued', clock(enqueuedAt)); }
     if (info.result) {
       startedAt = info.result.started_at || startedAt;
-      var outcome = document.getElementById('outcome');
-      outcome.innerHTML = '';
-      outcome.append(element('span', 'k', 'finished'), document.createTextNode(clock(info.result.finished_at) + ' '), element('span', 'muted', 'took ' + fmtDur(info.result.duration_sec * 1000)), element('span', 'sep', '·'), document.createTextNode('exit ' + info.result.exit_code));
+      var detail = document.getElementById('state-detail');
+      detail.innerHTML = '';
+      detail.append(document.createTextNode('exit ' + info.result.exit_code), element('span', 'sep', '·'), element('span', 'muted', 'took ' + fmtDur(info.result.duration_sec * 1000)));
+      var third = document.getElementById('third');
+      third.innerHTML = '';
+      third.append(element('span', 'k', 'finished'), document.createTextNode(clock(info.result.finished_at)));
     }
     timeline();
   }
@@ -300,9 +300,6 @@ var taskTmpl = template.Must(template.New("task").Funcs(pageFuncs).Parse(pageHea
       .then(function (data) { render(data); online(true); })
       .catch(function (failure) { online(false, failure); });
   }
-  document.getElementById('copy').addEventListener('click', function () {
-    if (navigator.clipboard) navigator.clipboard.writeText(guid);
-  });
   log.addEventListener('scroll', function () { if (log.scrollTop < 40) older(); });
   var ticks = 0;
   setInterval(function () {
