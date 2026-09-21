@@ -46,8 +46,13 @@ type EtcdConfig struct {
 	Endpoints []string `json:"endpoints"`
 }
 
+// ControlConfig.Loki is the Loki base URL the task log endpoint queries;
+// LokiSelector is the stream selector the collector files task output
+// under. Both empty leaves /v1/tasks/<guid>/log unavailable.
 type ControlConfig struct {
-	Listen string `json:"listen"`
+	Listen       string `json:"listen"`
+	Loki         string `json:"loki,omitempty"`
+	LokiSelector string `json:"loki_selector,omitempty"`
 }
 
 // ServeConfig.Listen is where the leader answers GET /v1/inflight. Every

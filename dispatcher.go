@@ -25,9 +25,9 @@ type Dispatcher struct {
 	hostNames []string // sorted; deterministic iteration
 
 	mu sync.Mutex
-	// guid -> host the task was dispatched to. Doubles as the busy set
+	// guid -> where the task was dispatched. Doubles as the busy set
 	// for pickAll and as the source for the inflight handle.
-	inflight map[string]string
+	inflight map[string]InflightEntry
 
 	wake chan struct{}
 }
@@ -85,7 +85,7 @@ func NewDispatcher(cli *clientv3.Client, leader *Leader, cfg *Config, keyFiles [
 		index:     NewQueueIndex(cli),
 		hosts:     hosts,
 		hostNames: names,
-		inflight:  make(map[string]string),
+		inflight:  make(map[string]InflightEntry),
 		wake:      make(chan struct{}, 1),
 	}
 }
@@ -193,20 +193,24 @@ func (d *Dispatcher) schedulerLoop(ctx context.Context) {
 }
 
 // pickAll scans the queue in priority order, tries to dispatch every eligible
-// Inflight returns a copy of guid -> host for the tasks running right now.
-// Only the leader dispatches, so only the leader's answer is meaningful;
-// control resolves the leader through etcd before asking.
-func (d *Dispatcher) Inflight() map[string]string {
+// Inflight returns a copy of guid -> endpoint for the tasks running right
+// now. Only the leader dispatches, so only the leader's answer is
+// meaningful; control resolves the leader through etcd before asking.
+func (d *Dispatcher) Inflight() map[string]InflightEntry {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	out := make(map[string]string, len(d.inflight))
+	out := make(map[string]InflightEntry, len(d.inflight))
 
-	for guid, host := range d.inflight {
-		out[guid] = host
+	for guid, entry := range d.inflight {
+		out[guid] = entry
 	}
 
 	return out
+}
+
+func (d *Dispatcher) taskCpus(host *hostState, slots int) int {
+	return int(float64(slots*host.cpusPerSlot)*d.cfg.CpuOvercommit + 0.5)
 }
 
 // task to a host with capacity. Skips tasks whose slot count exceeds every
@@ -238,7 +242,7 @@ func (d *Dispatcher) pickAll(ctx context.Context) {
 			continue
 		}
 
-		d.inflight[task.GUID] = ref.ep.Host
+		d.inflight[task.GUID] = InflightEntry{Host: ref.ep.Host, User: ref.ep.User, Port: ref.ep.Port, Cpus: d.taskCpus(host, slots)}
 		d.mu.Unlock()
 
 		go d.runTask(ctx, task, slots, ref, host)
@@ -300,7 +304,7 @@ func (d *Dispatcher) runTask(ctx context.Context, task Task, slots int, ref *end
 			task.Env = map[string]string{}
 		}
 
-		cpus := int(float64(slots*host.cpusPerSlot)*d.cfg.CpuOvercommit + 0.5)
+		cpus := d.taskCpus(host, slots)
 
 		task.Env["MOLOT_SLOTS"] = strconv.Itoa(slots)
 		task.Env["MOLOT_CPUS"] = strconv.Itoa(cpus)

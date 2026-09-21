@@ -43,7 +43,9 @@ func webMain(args []string) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", srv.handleIndex)
 	mux.HandleFunc("/endpoints", srv.handleEndpoints)
+	mux.HandleFunc("/tasks/", srv.handleTask)
 	mux.HandleFunc("/api/tasks", srv.handleAPITasks)
+	mux.HandleFunc("/api/tasks/", srv.handleAPITask)
 
 	server := &http.Server{Addr: cfg.Web.Listen, Handler: mux}
 
@@ -76,6 +78,7 @@ type webServer struct {
 
 type taskRow struct {
 	GUID       string
+	Root       string
 	Descr      string
 	Host       string
 	Slots      int
@@ -91,9 +94,15 @@ type pageData struct {
 	Waiting   int
 	Error     string
 	Now       string
+	Task      TaskInfo
 }
 
-var dashboardTmpl = template.Must(template.New("dashboard").Funcs(template.FuncMap{"clock": taskClock}).Parse(`<!doctype html>
+var pageFuncs = template.FuncMap{"clock": taskClock}
+
+// pageHead is the document head every page shares: the palette, the
+// sidebar and the queue table styles. Each page appends its own rules
+// before closing the style element.
+const pageHead = `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -142,6 +151,8 @@ tr.running{background:var(--runrow)}tbody tr:hover{background:var(--hover)}
 .task-line{display:flex;align-items:center;gap:11px;min-width:0}
 .task-line .dot{width:5px;height:5px}
 .task-body{min-width:0}
+.task-link{display:block;text-decoration:none;color:inherit}
+.task-link:hover .task-name{color:var(--accent)}
 .task-name{white-space:pre-wrap;font:12px/1.55 var(--mono);color:var(--text);overflow-wrap:anywhere}
 .task-guid{margin-top:4px;font:10px/1.4 var(--mono);color:var(--dim);overflow-wrap:anywhere}
 .host-name{overflow-wrap:anywhere;font:12px/1.5 var(--mono);color:var(--accent)}
@@ -163,7 +174,9 @@ td.number{font:11px var(--mono);color:var(--muted)}
 .sidebar-foot .dot.stale{background:#d03b3b}
 .number.old{color:#ec835a}
 .error{border-left:2px solid #d03b3b;padding:10px 14px;margin:0 0 18px;color:#d03b3b;font:12px/1.6 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere}
-</style>
+`
+
+var dashboardTmpl = template.Must(template.New("dashboard").Funcs(pageFuncs).Parse(pageHead + `</style>
 </head>
 <body>
 <aside class="sidebar" aria-label="Navigation">
@@ -193,7 +206,7 @@ td.number{font:11px var(--mono);color:var(--muted)}
     <tbody id="rows">
     {{range .Tasks}}
       <tr class="{{if .Host}}running{{else}}waiting{{end}}" data-task>
-        <td><div class="task-line"><span class="dot{{if not .Host}} waiting{{end}}" title="{{if .Host}}Running{{else}}Waiting{{end}}"></span><div class="task-body"><div class="task-name">{{.Descr}}</div><div class="task-guid">{{.GUID}}</div></div></div></td>
+        <td><div class="task-line"><span class="dot{{if not .Host}} waiting{{end}}" title="{{if .Host}}Running{{else}}Waiting{{end}}"></span><div class="task-body"><a class="task-link" href="/tasks/{{.GUID}}?root={{.Root}}"><div class="task-name">{{.Descr}}</div><div class="task-guid">{{.GUID}}</div></a></div></div></td>
         <td>{{if .Host}}<span class="host-name">{{.Host}}</span>{{else}}<span class="dash">—</span>{{end}}</td>
         <td class="number">{{.Slots}}</td>
         <td class="number"><time class="clock" datetime="{{.EnqueuedAt}}" title="{{.EnqueuedAt}}">{{clock .EnqueuedAt}}</time></td>
@@ -302,7 +315,10 @@ td.number{font:11px var(--mono);color:var(--muted)}
       var dot = element('span', task.host ? 'dot' : 'dot waiting');
       dot.title = task.host ? 'Running' : 'Waiting';
       var body = element('div', 'task-body');
-      body.append(element('div', 'task-name', task.descr || ''), element('div', 'task-guid', task.guid));
+      var link = element('a', 'task-link');
+      link.href = '/tasks/' + encodeURIComponent(task.guid) + '?root=' + encodeURIComponent(task.root || '');
+      link.append(element('div', 'task-name', task.descr || ''), element('div', 'task-guid', task.guid));
+      body.appendChild(link);
       line.append(dot, body);
       first.appendChild(line);
       row.appendChild(first);
@@ -391,6 +407,7 @@ func (s *webServer) handleIndex(w http.ResponseWriter, r *http.Request) {
 
 			data.Tasks[i] = taskRow{
 				GUID:       t.GUID,
+				Root:       t.Root,
 				Descr:      t.Descr,
 				Host:       t.Host,
 				Slots:      slots,

@@ -45,20 +45,20 @@ func TestListenPortTakesPortFromAddr(t *testing.T) {
 }
 
 func TestDispatcherInflightIsACopy(t *testing.T) {
-	d := &Dispatcher{inflight: map[string]string{"guid-1": "worker-1"}}
+	d := &Dispatcher{inflight: map[string]InflightEntry{"guid-1": {Host: "worker-1"}}}
 
 	got := d.Inflight()
 
-	if got["guid-1"] != "worker-1" {
+	if got["guid-1"].Host != "worker-1" {
 		t.Fatalf("Inflight() = %v, want guid-1 on worker-1", got)
 	}
 
 	// Mutating the snapshot must not reach into the dispatcher's own map,
 	// which the dispatch loop keeps writing under its mutex.
-	got["guid-1"] = "tampered"
+	got["guid-1"] = InflightEntry{Host: "tampered"}
 	delete(got, "guid-1")
 
-	if d.inflight["guid-1"] != "worker-1" {
+	if d.inflight["guid-1"].Host != "worker-1" {
 		t.Errorf("Inflight() handed out the live map: %v", d.inflight)
 	}
 }

@@ -198,3 +198,108 @@ func TestWebAPITasksFailsLoudWhenControlIsDown(t *testing.T) {
 		t.Fatalf("status = %d, want 502", res.Code)
 	}
 }
+
+func TestWebQueueRowsLinkToTaskPage(t *testing.T) {
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		Throw(json.NewEncoder(w).Encode(TaskListResp{Tasks: []TaskListItem{{GUID: "task-1", Root: "fixer", Descr: "x"}}}))
+	}))
+	defer api.Close()
+
+	srv := &webServer{api: api.URL, http: api.Client()}
+	res := httptest.NewRecorder()
+	srv.handleIndex(res, httptest.NewRequest(http.MethodGet, "/", nil))
+
+	if !strings.Contains(res.Body.String(), `href="/tasks/task-1?root=fixer"`) {
+		t.Fatalf("queue row is not a link to the task page: %s", res.Body.String())
+	}
+}
+
+func TestWebTaskPageRendersControlInfo(t *testing.T) {
+	var path string
+
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path = r.URL.String()
+		Throw(json.NewEncoder(w).Encode(TaskInfo{
+			GUID: "task-1", State: "queued", Root: "fixer", Descr: "updater_fixer run & co", Slots: 2, EnqueuedAt: "2026-09-21T08:23:47Z",
+			EnvKeys: []string{"GORN_API", "S3_ENDPOINT"}, Host: "192.168.103.16", User: "gorn_0", Port: 9000, Cpus: 10,
+		}))
+	}))
+	defer api.Close()
+
+	srv := &webServer{api: api.URL, http: api.Client()}
+	res := httptest.NewRecorder()
+	srv.handleTask(res, httptest.NewRequest(http.MethodGet, "/tasks/task-1?root=fixer", nil))
+	body := res.Body.String()
+
+	if res.Code != http.StatusOK || path != "/v1/tasks/task-1/info?root=fixer" {
+		t.Fatalf("status=%d control path=%q", res.Code, path)
+	}
+
+	for _, want := range []string{"updater_fixer run &amp; co", `data-guid="task-1"`, `data-root="fixer"`, "gorn_0", "192.168.103.16:9000", `id="slots">2<`, `id="cpus">10<`, "2 keys", `title="GORN_API, S3_ENDPOINT"`, "08:23:47", `id="log"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("task page does not contain %q", want)
+		}
+	}
+}
+
+func TestWebTaskPageSurvivesControlOutage(t *testing.T) {
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "etcd down", http.StatusInternalServerError)
+	}))
+	defer api.Close()
+
+	srv := &webServer{api: api.URL, http: api.Client()}
+	res := httptest.NewRecorder()
+	srv.handleTask(res, httptest.NewRequest(http.MethodGet, "/tasks/task-1", nil))
+	body := res.Body.String()
+
+	if res.Code != http.StatusOK || !strings.Contains(body, "etcd down") || !strings.Contains(body, `data-guid="task-1"`) {
+		t.Fatalf("outage page: status=%d body=%s", res.Code, body)
+	}
+}
+
+func TestWebAPITaskProxiesInfoAndLogWithQuery(t *testing.T) {
+	var paths []string
+
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.String())
+
+		if strings.HasSuffix(r.URL.Path, "/log") {
+			Throw(json.NewEncoder(w).Encode(LogResp{GUID: "task-1", Lines: []LogLine{{Cursor: "5", TS: "t", Stream: "stdout", Line: "hi"}}}))
+
+			return
+		}
+
+		Throw(json.NewEncoder(w).Encode(TaskInfo{GUID: "task-1", State: "done"}))
+	}))
+	defer api.Close()
+
+	srv := &webServer{api: api.URL, http: api.Client()}
+
+	res := httptest.NewRecorder()
+	srv.handleAPITask(res, httptest.NewRequest(http.MethodGet, "/api/tasks/task-1?root=fixer", nil))
+
+	var info TaskInfo
+	Throw(json.Unmarshal(res.Body.Bytes(), &info))
+
+	res = httptest.NewRecorder()
+	srv.handleAPITask(res, httptest.NewRequest(http.MethodGet, "/api/tasks/task-1/log?root=fixer&after=17&limit=500", nil))
+
+	var lg LogResp
+	Throw(json.Unmarshal(res.Body.Bytes(), &lg))
+
+	if info.State != "done" || len(lg.Lines) != 1 || lg.Lines[0].Line != "hi" {
+		t.Fatalf("proxy answers: info=%+v log=%+v", info, lg)
+	}
+
+	if len(paths) != 2 || paths[0] != "/v1/tasks/task-1/info?root=fixer" || paths[1] != "/v1/tasks/task-1/log?root=fixer&after=17&limit=500" {
+		t.Fatalf("control paths: %v", paths)
+	}
+
+	res = httptest.NewRecorder()
+	srv.handleAPITask(res, httptest.NewRequest(http.MethodGet, "/api/tasks/task-1/output", nil))
+
+	if res.Code != http.StatusBadGateway {
+		t.Fatalf("unknown resource status = %d, want 502", res.Code)
+	}
+}

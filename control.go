@@ -12,6 +12,8 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -59,6 +61,7 @@ type EndpointsResp struct {
 type TaskListItem struct {
 	GUID string            `json:"guid"`
 	Env  map[string]string `json:"env,omitempty"`
+	Root string            `json:"root,omitempty"`
 	// Host is the worker the task is running on, empty while it waits.
 	// A task stays in the queue for its whole life, so this field is what
 	// separates running from waiting.
@@ -69,8 +72,50 @@ type TaskListItem struct {
 	CreateRevision int64  `json:"create_revision"`
 }
 
+// InflightEntry is where a running task went. Older leaders answered with
+// the bare host string; unmarshalling accepts both so a control that is
+// ahead of the leader during a rollout keeps its running/waiting split.
+type InflightEntry struct {
+	Host string `json:"host"`
+	User string `json:"user,omitempty"`
+	Port int    `json:"port,omitempty"`
+	Cpus int    `json:"cpus,omitempty"`
+}
+
+func (e *InflightEntry) UnmarshalJSON(data []byte) error {
+	return e.unmarshalJSON(data)
+}
+
+func (e *InflightEntry) unmarshalJSON(data []byte) error {
+	if len(data) > 0 && data[0] == '"' {
+		return json.Unmarshal(data, &e.Host)
+	}
+
+	type plain InflightEntry
+
+	return json.Unmarshal(data, (*plain)(e))
+}
+
 type InflightResp struct {
-	Inflight map[string]string `json:"inflight"`
+	Inflight map[string]InflightEntry `json:"inflight"`
+}
+
+// TaskInfo is everything control knows about one task: the queue record
+// while it waits or runs, the leader's placement while it runs, and the
+// wrapper's result once it is done. Env values never leave control.
+type TaskInfo struct {
+	GUID       string      `json:"guid"`
+	State      string      `json:"state"`
+	Root       string      `json:"root,omitempty"`
+	Descr      string      `json:"descr,omitempty"`
+	Slots      int         `json:"slots,omitempty"`
+	EnqueuedAt string      `json:"enqueued_at,omitempty"`
+	EnvKeys    []string    `json:"env_keys,omitempty"`
+	Host       string      `json:"host,omitempty"`
+	User       string      `json:"user,omitempty"`
+	Port       int         `json:"port,omitempty"`
+	Cpus       int         `json:"cpus,omitempty"`
+	Result     *WrapResult `json:"result,omitempty"`
 }
 
 type TaskListResp struct {
@@ -127,6 +172,20 @@ func controlMain(args []string) {
 		maxHostSlots: maxHostSlots(cfg.Endpoints),
 	}
 
+	if cfg.Control.Loki != "" {
+		selector := cfg.Control.LokiSelector
+
+		if selector == "" {
+			selector = defaultLokiSelector
+		}
+
+		srv.loki = &lokiClient{
+			base:     strings.TrimRight(cfg.Control.Loki, "/"),
+			selector: selector,
+			http:     &http.Client{Timeout: 30 * time.Second},
+		}
+	}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/tasks", srv.handleTasks)
 	mux.HandleFunc("/v1/tasks/", srv.handleTaskByID)
@@ -170,7 +229,18 @@ type controlServer struct {
 	servePort    string
 	http         *http.Client
 	maxHostSlots int
+	// loki answers /v1/tasks/<guid>/log; nil when control.loki is unset.
+	loki *lokiClient
 }
+
+const defaultLokiSelector = `{service="gorn_task"}`
+
+// logWindow bounds how far back a task log query reaches when the caller
+// gives no anchor; Loki rejects unbounded ranges.
+const logWindow = 30 * 24 * time.Hour
+
+const defaultLogLimit = 500
+const maxLogLimit = 5000
 
 // firstLine returns the first non-empty line of s stripped. Used as a
 // human-readable fallback for Task.Descr when ignite didn't pass one.
@@ -244,7 +314,8 @@ func (s *controlServer) listTasks(w http.ResponseWriter, r *http.Request) {
 		out[i] = TaskListItem{
 			GUID:           it.Task.GUID,
 			Env:            it.Task.Env,
-			Host:           inflight[it.Task.GUID],
+			Root:           it.Task.Root,
+			Host:           inflight[it.Task.GUID].Host,
 			Descr:          it.Task.Descr,
 			Slots:          it.Task.Slots,
 			EnqueuedAt:     it.Task.EnqueuedAt,
@@ -261,12 +332,12 @@ func (s *controlServer) listTasks(w http.ResponseWriter, r *http.Request) {
 // Failure degrades to an empty map: the queue is still worth serving without
 // the running/waiting distinction, so a leaderless moment or an unreachable
 // leader must not fail the whole listing.
-func (s *controlServer) inflight(ctx context.Context) map[string]string {
+func (s *controlServer) inflight(ctx context.Context) map[string]InflightEntry {
 	if s.servePort == "" {
 		return nil
 	}
 
-	var out map[string]string
+	var out map[string]InflightEntry
 
 	exc := Try(func() {
 		host, ok := leaderHost(ctx, s.etcd)
@@ -382,6 +453,14 @@ func (s *controlServer) handleTaskByID(w http.ResponseWriter, r *http.Request) {
 			s.getOutput(w, r, guid)
 
 			return
+		case "info":
+			s.getInfo(w, r, guid)
+
+			return
+		case "log":
+			s.getLog(w, r, guid)
+
+			return
 		case "queued":
 			s.getQueued(w, r, guid)
 
@@ -448,6 +527,165 @@ func (s *controlServer) getState(w http.ResponseWriter, r *http.Request, guid st
 	}
 
 	httpJSON(w, http.StatusOK, StateResp{GUID: guid, State: state})
+}
+
+func envKeys(env map[string]string) []string {
+	keys := make([]string, 0, len(env))
+
+	for k := range env {
+		keys = append(keys, k)
+	}
+
+	sort.Strings(keys)
+
+	return keys
+}
+
+// getInfo assembles TaskInfo. The queue record carries the root while the
+// task is queued; afterwards it has to come from ?root= or, failing that,
+// from the task's own log lines, which the wrapper stamps with it.
+func (s *controlServer) getInfo(w http.ResponseWriter, r *http.Request, guid string) {
+	info := TaskInfo{GUID: guid, State: "not_found", Root: r.URL.Query().Get("root")}
+	resp := Throw2(s.etcd.Get(r.Context(), queueKey(guid)))
+
+	if len(resp.Kvs) > 0 {
+		var task Task
+		Throw(json.Unmarshal(resp.Kvs[0].Value, &task))
+
+		info.State = "queued"
+		info.Root = task.Root
+		info.Descr = task.Descr
+		info.Slots = task.Slots
+		info.EnqueuedAt = task.EnqueuedAt
+		info.EnvKeys = envKeys(task.Env)
+
+		if entry, ok := s.inflight(r.Context())[guid]; ok {
+			info.Host = entry.Host
+			info.User = entry.User
+			info.Port = entry.Port
+			info.Cpus = entry.Cpus
+		}
+
+		httpJSON(w, http.StatusOK, info)
+
+		return
+	}
+
+	if info.Root == "" && s.loki != nil {
+		now := time.Now()
+
+		for _, line := range s.loki.taskLog(r.Context(), guid, now.Add(-logWindow), now, "forward", 50) {
+			if line.Root != "" {
+				info.Root = line.Root
+
+				break
+			}
+		}
+	}
+
+	if info.Root == "" {
+		ThrowHTTP(http.StatusBadRequest, "root query param required for a task that is no longer queued")
+	}
+
+	if result := s3GetBytes(r.Context(), s.s3, s.bucket, resultKey(info.Root, guid)); result != nil {
+		var parsed WrapResult
+		Throw(json.Unmarshal(result, &parsed))
+
+		info.State = "done"
+		info.Result = &parsed
+		info.Host = parsed.Host
+		info.User = parsed.User
+	}
+
+	httpJSON(w, http.StatusOK, info)
+}
+
+func logLimit(r *http.Request) int {
+	raw := r.URL.Query().Get("limit")
+
+	if raw == "" {
+		return defaultLogLimit
+	}
+
+	limit, err := strconv.Atoi(raw)
+
+	if err != nil || limit <= 0 {
+		ThrowHTTP(http.StatusBadRequest, "limit must be a positive integer")
+	}
+
+	if limit > maxLogLimit {
+		return maxLogLimit
+	}
+
+	return limit
+}
+
+func logCursor(r *http.Request, name string) (time.Time, bool) {
+	raw := r.URL.Query().Get(name)
+
+	if raw == "" {
+		return time.Time{}, false
+	}
+
+	ns, err := strconv.ParseInt(raw, 10, 64)
+
+	if err != nil {
+		ThrowHTTP(http.StatusBadRequest, "%s must be a nanosecond cursor", name)
+	}
+
+	return time.Unix(0, ns), true
+}
+
+// getLog pages through a task's log by collector cursor: no cursor means
+// the newest lines, after= means everything newer (the live tail),
+// before= means the page above what the caller already has. ?since=
+// (RFC3339, typically enqueued_at) narrows the window Loki has to scan.
+func (s *controlServer) getLog(w http.ResponseWriter, r *http.Request, guid string) {
+	if s.loki == nil {
+		ThrowHTTP(http.StatusServiceUnavailable, "task log source is not configured (control.loki)")
+	}
+
+	if strings.ContainsAny(guid, "\\\" \t\n") {
+		ThrowHTTP(http.StatusBadRequest, "invalid guid")
+	}
+
+	now := time.Now()
+	start := now.Add(-logWindow)
+	end := now
+	direction := "backward"
+	limit := logLimit(r)
+
+	if since := r.URL.Query().Get("since"); since != "" {
+		at, err := time.Parse(time.RFC3339Nano, since)
+
+		if err != nil {
+			ThrowHTTP(http.StatusBadRequest, "since must be an RFC3339 timestamp")
+		}
+
+		start = at.Add(-time.Hour)
+	}
+
+	if after, ok := logCursor(r, "after"); ok {
+		start = after.Add(time.Nanosecond)
+		direction = "forward"
+	}
+
+	if before, ok := logCursor(r, "before"); ok {
+		end = before.Add(-time.Nanosecond)
+	}
+
+	lines := s.loki.taskLog(r.Context(), guid, start, end, direction, limit)
+	out := LogResp{GUID: guid, Lines: lines}
+
+	for _, line := range lines {
+		if line.Root != "" {
+			out.Root = line.Root
+
+			break
+		}
+	}
+
+	httpJSON(w, http.StatusOK, out)
 }
 
 func (s *controlServer) getContent(w http.ResponseWriter, r *http.Request, guid, name string) {
