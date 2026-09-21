@@ -602,36 +602,6 @@ func (s *controlServer) getInfo(w http.ResponseWriter, r *http.Request, guid str
 	httpJSON(w, http.StatusOK, info)
 }
 
-// taskAnchor finds when the task's log can have begun without touching
-// Loki: the queue record's enqueued_at while the task lives, the
-// wrapper's started_at from result.json once it is done. Empty when
-// neither is known, which leaves the caller with the full window.
-func (s *controlServer) taskAnchor(ctx context.Context, guid, root string) string {
-	resp := Throw2(s.etcd.Get(ctx, queueKey(guid)))
-
-	if len(resp.Kvs) > 0 {
-		var task Task
-		Throw(json.Unmarshal(resp.Kvs[0].Value, &task))
-
-		return task.EnqueuedAt
-	}
-
-	if root == "" {
-		return ""
-	}
-
-	result := s3GetBytes(ctx, s.s3, s.bucket, resultKey(root, guid))
-
-	if result == nil {
-		return ""
-	}
-
-	var parsed WrapResult
-	Throw(json.Unmarshal(result, &parsed))
-
-	return parsed.StartedAt
-}
-
 func logLimit(r *http.Request) int {
 	raw := r.URL.Query().Get("limit")
 
@@ -687,13 +657,7 @@ func (s *controlServer) getLog(w http.ResponseWriter, r *http.Request, guid stri
 	direction := "backward"
 	limit := logLimit(r)
 
-	since := r.URL.Query().Get("since")
-
-	if since == "" {
-		since = s.taskAnchor(r.Context(), guid, r.URL.Query().Get("root"))
-	}
-
-	if since != "" {
+	if since := r.URL.Query().Get("since"); since != "" {
 		at, err := time.Parse(time.RFC3339Nano, since)
 
 		if err != nil {
